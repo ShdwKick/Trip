@@ -6,7 +6,7 @@ name: Build and publish
 # а он доступа к серверу не даёт.
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths-ignore:
       - '**.md'
       - 'deploy/**'
