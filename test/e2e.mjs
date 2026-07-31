@@ -231,6 +231,35 @@ ok("владелец закрыл доступ по ссылке", r.status === 
 r = await asJson(friend.access_token, "/invite/" + code);
 ok("старая ссылка больше не работает", r.status === 404);
 
+/* ---------- 10.5. Имя из общего кабинета ---------- */
+// Имя необязательное и показывается, только если человек сам включил показ.
+// Оно подписано внутрь токена, поэтому старый токен о нём не знает — сервису
+// имя приезжает лишь со следующим, и это ровно то, что здесь проверяется.
+const setProfile = (token, body) => fetch(`${AUTH}/api/account/profile`, {
+  method: "PUT", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+  body: JSON.stringify(body),
+});
+const refreshToken = rt => fetch(`${AUTH}/oauth/token`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ grant_type: "refresh_token", client_id: "trip", refresh_token: rt }),
+}).then(x => x.json());
+
+ok("имя сохранено в auth", (await setProfile(me.access_token, { displayName: "Данила", showDisplayName: true })).status === 200);
+let fresh = await refreshToken(me.refresh_token);
+ok("свежий токен выдан", !!fresh.access_token);
+
+r = await asJson(fresh.access_token, "/trips");
+ok("сервис отдаёт имя рядом с логином", r.body.me?.name === "Данила" && r.body.me?.username === "danil", JSON.stringify(r.body.me));
+r = await asJson(fresh.access_token, "/trips/" + tripId);
+ok("имя доехало до участника поездки", r.body.members.find(m => m.username === "danil")?.name === "Данила");
+
+ok("показ имени выключен", (await setProfile(fresh.access_token, { displayName: "Данила", showDisplayName: false })).status === 200);
+fresh = await refreshToken(fresh.refresh_token);
+r = await asJson(fresh.access_token, "/trips/" + tripId);
+ok("выключенный показ убирает имя обратно", r.body.members.find(m => m.username === "danil")?.name === null,
+  JSON.stringify(r.body.members));
+me.access_token = fresh.access_token;   // дальше работаем свежим
+
 /* ---------- 11. Фотографии ---------- */
 // Минимальный настоящий PNG 1×1 — важна именно сигнатура файла: сервер верит ей,
 // а не заголовку Content-Type.

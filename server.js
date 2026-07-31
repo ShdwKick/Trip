@@ -75,12 +75,14 @@ db.exec(`
   );
 
   -- Участие. Своей таблицы пользователей у сервиса нет и быть не должно:
-  -- ключ — стабильный user_id из токена, username лежит рядом только чтобы
-  -- показывать подпись в интерфейсе.
+  -- ключ — стабильный user_id из токена, username и name лежат рядом только
+  -- чтобы показывать подпись в интерфейсе. Имя (name) есть, лишь когда человек
+  -- сам включил его показ в кабинете BurningHouse; иначе остаётся логин.
   CREATE TABLE IF NOT EXISTS trip_members (
     trip_id   TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
     user_id   TEXT NOT NULL,
     username  TEXT,
+    name      TEXT,
     role      TEXT NOT NULL DEFAULT 'member',   -- owner | member
     joined_at INTEGER NOT NULL,
     PRIMARY KEY (trip_id, user_id)
@@ -134,6 +136,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_photos_place ON photos(place_id);
 `);
 
+// Колонка появилась позже самой таблицы: в auth завели необязательное имя,
+// и базы, созданные до этого, о нём не знают. CREATE TABLE их не тронет.
+try { db.exec("ALTER TABLE trip_members ADD COLUMN name TEXT"); } catch { /* уже есть */ }
+
 const stmt = {
   // Ссылку на базу держим здесь намеренно. После инициализации `db` больше нигде
   // не упоминается, и V8 вправе выбросить переменную из контекста модуля — тогда
@@ -160,8 +166,8 @@ const stmt = {
   setCode:     db.prepare("UPDATE trips SET join_code = ?, updated_at = ? WHERE id = ?"),
 
   member:      db.prepare("SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?"),
-  members:     db.prepare("SELECT user_id, username, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
-  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,role,joined_at) VALUES (?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username"),
+  members:     db.prepare("SELECT user_id, username, name, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
+  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,name,role,joined_at) VALUES (?,?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name"),
   dropMember:  db.prepare("DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?"),
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM trip_members WHERE trip_id = ? AND role = 'owner'"),
 
@@ -399,11 +405,13 @@ function access(tripId, user) {
   if (!trip) return null;
   const member = stmt.member.get(tripId, user.id);
   if (!member) return null;
-  // Раз пользователь пришёл — заодно освежаем логин: он мог смениться в auth,
-  // а подписи в интерфейсе берутся отсюда.
-  if (user.username && member.username !== user.username) {
-    stmt.addMember.run(tripId, user.id, user.username, member.role, member.joined_at);
+  // Раз пользователь пришёл — заодно освежаем логин и имя: и то и другое живёт
+  // в auth и могло измениться там, а подписи в интерфейсе берутся отсюда. Имя
+  // ещё и включается-выключается пользователем, поэтому сверяем в обе стороны.
+  if ((user.username && member.username !== user.username) || (user.name || null) !== (member.name || null)) {
+    stmt.addMember.run(tripId, user.id, user.username, user.name || null, member.role, member.joined_at);
     member.username = user.username;
+    member.name = user.name || null;
   }
   return { trip, member, isOwner: member.role === "owner" };
 }
@@ -425,7 +433,7 @@ function tripPayload(trip, me) {
       joinCode: trip.join_code, createdBy: trip.created_by, createdAt: trip.created_at, updatedAt: trip.updated_at,
       myRole: me.role,
     },
-    members: stmt.members.all(trip.id).map(m => ({ userId: m.user_id, username: m.username, role: m.role, joinedAt: m.joined_at })),
+    members: stmt.members.all(trip.id).map(m => ({ userId: m.user_id, username: m.username, name: m.name, role: m.role, joinedAt: m.joined_at })),
     places: places.map(p => ({
       id: p.id, title: p.title, kind: p.kind, note: p.note, address: p.address,
       mapUrl: p.map_url, lat: p.lat, lon: p.lon, linkUrl: p.link_url,
@@ -554,7 +562,7 @@ async function api(req, res, url, user) {
     if (m === "GET") {
       const rows = stmt.tripsOfUser.all(user.id);
       return json(res, 200, {
-        me: { id: user.id, username: user.username },
+        me: { id: user.id, username: user.username, name: user.name || null },
         trips: rows.map(t => ({
           id: t.id, title: t.title, destination: t.destination, startsOn: t.starts_on, endsOn: t.ends_on,
           currency: t.currency, status: t.status, myRole: t.my_role,
@@ -578,7 +586,7 @@ async function api(req, res, url, user) {
         newJoinCode(),
         user.id, ts, ts,
       );
-      stmt.addMember.run(id, user.id, user.username || null, "owner", ts);
+      stmt.addMember.run(id, user.id, user.username || null, user.name || null, "owner", ts);
       return json(res, 200, tripPayload(stmt.trip.get(id), { role: "owner" }));
     }
     return json(res, 405, { error: "method not allowed" });
@@ -595,12 +603,13 @@ async function api(req, res, url, user) {
       return json(res, 200, {
         tripId: trip.id, title: trip.title, destination: trip.destination,
         startsOn: trip.starts_on, endsOn: trip.ends_on,
-        members: stmt.members.all(trip.id).map(x => x.username).filter(Boolean),
+        // Показываем имя, если человек включил его показ, иначе логин.
+        members: stmt.members.all(trip.id).map(x => x.name || x.username).filter(Boolean),
         alreadyMember: !!already,
       });
     }
     if (m === "POST") {
-      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, "member", now());
+      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, user.name || null, "member", now());
       return json(res, 200, { tripId: trip.id, joined: !already });
     }
     return json(res, 405, { error: "method not allowed" });
@@ -670,7 +679,7 @@ async function api(req, res, url, user) {
         if (!role) return json(res, 400, { error: "bad role" });
         const target = stmt.member.get(tripId, tail[1]);
         if (!target) return json(res, 404, { error: "no such member" });
-        stmt.addMember.run(tripId, target.user_id, target.username, role, target.joined_at);
+        stmt.addMember.run(tripId, target.user_id, target.username, target.name || null, role, target.joined_at);
         return json(res, 200, { ok: true });
       }
       return json(res, 405, { error: "method not allowed" });

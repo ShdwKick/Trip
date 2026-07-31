@@ -24,7 +24,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 
 let auth = null;
 let state = {
-  me: null,          // { id, username }
+  me: null,          // { id, username, name }
   trips: [],         // список поездок
   trip: null,        // открытая поездка целиком
   filter: "all",     // all | todo | done
@@ -78,6 +78,13 @@ function plural(n, one, few, many) {
   return b === 1 ? one : many;
 }
 const initials = name => (name || "?").trim().slice(0, 2);
+
+/**
+ * Как подписывать человека. `name` — необязательное имя из общего кабинета
+ * BurningHouse: оно есть, только если человек сам включил его показ, и тогда
+ * это его решение, действующее сразу во всех сервисах. Иначе остаётся логин.
+ */
+const who = u => (u && (u.name || u.username)) || "участник";
 
 let snackTimer = null;
 function snack(text) {
@@ -245,8 +252,8 @@ function renderTrips() {
   const trips = state.trips;
   $("tripsEmpty").hidden = trips.length > 0;
   $("tripsSub").textContent = trips.length
-    ? `${trips.length} ${plural(trips.length, "поездка", "поездки", "поездок")} · вы вошли как ${state.me?.username || "—"}`
-    : `Вы вошли как ${state.me?.username || "—"}`;
+    ? `${trips.length} ${plural(trips.length, "поездка", "поездки", "поездок")} · вы вошли как ${who(state.me)}`
+    : `Вы вошли как ${who(state.me)}`;
 
   trips.forEach((t, i) => {
     const card = el("button", "trip-card");
@@ -279,7 +286,7 @@ async function openTrip(id) {
   const data = await act(() => api("/trips/" + id));
   if (!data) { location.hash = "#/"; return; }
   state.trip = data;
-  if (!state.me) state.me = { id: null, username: null };
+  if (!state.me) state.me = { id: null, username: null, name: null };
   renderTrip();
 }
 
@@ -292,6 +299,52 @@ function tripCosts() {
     total += p.costPer === "person" ? p.costAmount * heads : p.costAmount;
   }
   return { total, perHead: total / heads, currency: trip.currency, heads };
+}
+
+/**
+ * Расшифровка сметы. Одна цифра в шапке всегда вызывает вопрос «откуда
+ * столько», а идти за ответом в список из двадцати мест — долго.
+ */
+function openCostDialog() {
+  const { trip, places } = state.trip;
+  const { total, perHead, currency, heads } = tripCosts();
+
+  const priced = places
+    .filter(p => Number.isFinite(p.costAmount))
+    .sort((a, b) => (a.day || "9999").localeCompare(b.day || "9999")
+      || (a.timeFrom || "99:99").localeCompare(b.timeFrom || "99:99")
+      || a.sortOrder - b.sortOrder);
+
+  const box = $("costList");
+  box.textContent = "";
+  for (const p of priced) {
+    const row = el("div", "cost-row");
+    // Раскладку «цена × людей» показываем только когда людей больше одного:
+    // иначе это то же самое число, написанное дважды.
+    const perPerson = p.costPer === "person" && heads > 1;
+    row.innerHTML =
+      `<span class="nm">${esc(p.title)}</span>` +
+      (p.day ? `<span class="day">${esc(dayFmtShort.format(parseDay(p.day)))}</span>` : "") +
+      `<span class="sum">${esc(money(p.costPer === "person" ? p.costAmount * heads : p.costAmount, p.costCurrency || currency))}` +
+      (perPerson ? ` <span class="per">${esc(money(p.costAmount, p.costCurrency || currency))} × ${heads}</span>` : "") +
+      `</span>`;
+    box.append(row);
+  }
+  if (!priced.length) {
+    box.append(Object.assign(el("div", "hint"), { textContent: "Пока ни у одного места не указана цена — смете складываться не из чего." }));
+  }
+
+  $("costTotal").innerHTML = priced.length
+    ? `<span class="k">Итого</span><span class="v">${esc(money(total, currency))}</span>` +
+      (heads > 1 ? `<span class="head">${esc(money(perHead, currency))} на человека</span>` : "")
+    : "";
+
+  const noPrice = places.length - priced.length;
+  $("costHint").textContent = noPrice
+    ? `Ещё ${noPrice} ${plural(noPrice, "место", "места", "мест")} без цены — в смету они не попали.`
+    : "Считаются все места списка, включая уже отмеченные.";
+
+  openScrim("costScrim");
 }
 
 function renderTrip() {
@@ -315,23 +368,26 @@ function renderTrip() {
 
   const done = places.filter(p => p.done).length;
   const { total, perHead, currency, heads } = tripCosts();
+  // Обе денежные плитки — кнопки: смета складывается из десятка мест, и
+  // единственная цифра без расшифровки вызывает вопрос «откуда столько».
   $("thStats").innerHTML = `
     <div class="stat"><div class="k">Отмечено</div><div class="v">${done} <small>из ${places.length}</small></div></div>
-    <div class="stat"><div class="k">Смета</div><div class="v">${esc(money(total, currency) || "—")}</div></div>
-    <div class="stat"><div class="k">На человека</div><div class="v">${esc(money(perHead, currency) || "—")} <small>× ${heads}</small></div></div>`;
+    <button class="stat tap" data-cost><div class="k">Смета</div><div class="v">${esc(money(total, currency) || "—")}</div></button>
+    <button class="stat tap" data-cost><div class="k">На человека</div><div class="v">${esc(money(perHead, currency) || "—")} <small>× ${heads}</small></div></button>`;
+  $("thStats").querySelectorAll("[data-cost]").forEach(b => { b.onclick = openCostDialog; });
 
   const people = $("thPeople");
   people.textContent = "";
   const iAmOwner = trip.myRole === "owner";
   for (const m of members) {
     const chip = el("span", "person" + (m.role === "owner" ? " owner" : ""));
-    chip.innerHTML = `<span class="ava">${esc(initials(m.username))}</span><span>${esc(m.username || "участник")}</span>`;
+    chip.innerHTML = `<span class="ava">${esc(initials(who(m)))}</span><span>${esc(who(m))}</span>`;
     if (iAmOwner && m.userId !== state.me?.id) {
       if (m.role !== "owner") {
         const crown = el("button", "icon-btn xs");
         crown.title = "Передать владение";
         crown.innerHTML = svg('<path d="M3 18h18"/><path d="M4 8l4 4 4-7 4 7 4-4v7H4z"/>', "icon xs");
-        crown.onclick = () => confirmDialog("Передать владение?", `${m.username || "Участник"} сможет менять и удалять поездку. Вы останетесь участником-владельцем тоже — владельцев может быть несколько.`, "Передать", async () => {
+        crown.onclick = () => confirmDialog("Передать владение?", `${who(m)} сможет менять и удалять поездку. Вы останетесь владельцем тоже — владельцев может быть несколько.`, "Передать", async () => {
           await act(() => api(`/trips/${trip.id}/members/${m.userId}`, { method: "PATCH", body: { role: "owner" } }), "Готово");
           openTrip(trip.id);
         });
@@ -340,7 +396,7 @@ function renderTrip() {
       const kick = el("button", "icon-btn xs kick");
       kick.title = "Убрать из поездки";
       kick.innerHTML = svg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>', "icon xs");
-      kick.onclick = () => confirmDialog("Убрать участника?", `${m.username || "Участник"} потеряет доступ к поездке. Добавленные им места и фото останутся.`, "Убрать", async () => {
+      kick.onclick = () => confirmDialog("Убрать участника?", `${who(m)} потеряет доступ к поездке. Добавленные им места и фото останутся.`, "Убрать", async () => {
         await act(() => api(`/trips/${trip.id}/members/${m.userId}`, { method: "DELETE" }), "Убрали");
         openTrip(trip.id);
       });
@@ -445,8 +501,8 @@ function placeCard(p, siblings) {
   if (p.address) line.push(`<span class="bit">${svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>', "icon xs")}${esc(p.address)}</span>`);
   if (p.done && p.doneBy) {
     // «отметил/отметила» здесь не написать, не угадывая род, — поэтому безличное.
-    const who = state.trip.members.find(m => m.userId === p.doneBy);
-    if (who) line.push(`<span class="bit">отмечено: ${who.userId === state.me?.id ? "вы" : esc(who.username || "участник")}</span>`);
+    const by = state.trip.members.find(m => m.userId === p.doneBy);
+    if (by) line.push(`<span class="bit">отмечено: ${by.userId === state.me?.id ? "вы" : esc(who(by))}</span>`);
   }
 
   body.innerHTML = `
