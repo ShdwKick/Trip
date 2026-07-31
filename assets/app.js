@@ -624,7 +624,6 @@ function openTripDialog(trip) {
   $("tdDest").value = trip?.destination || "";
   $("tdFrom").value = trip?.startsOn || "";
   $("tdTo").value = trip?.endsOn || "";
-  $("tdCurrency").value = trip?.currency || "RUB";
   $("tdStatus").value = trip?.status || "planning";
   $("tdDesc").value = trip?.description || "";
   $("tripDeleteBtn").hidden = !trip || trip.myRole !== "owner";
@@ -639,7 +638,8 @@ $("tripSaveBtn").onclick = async () => {
     destination: $("tdDest").value.trim(),
     startsOn: $("tdFrom").value || null,
     endsOn: $("tdTo").value || null,
-    currency: $("tdCurrency").value,
+    // currency не шлём: поле убрано из формы, у поездки остаётся рубль по
+    // умолчанию (а у уже созданных — то, что там записано).
     status: $("tdStatus").value,
     description: $("tdDesc").value.trim(),
   };

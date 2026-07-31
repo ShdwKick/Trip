@@ -176,32 +176,16 @@
       <div class="field filled"><input id="tdFrom" type="date"><label for="tdFrom">С</label></div>
       <div class="field filled"><input id="tdTo" type="date"><label for="tdTo">По</label></div>
     </div>
-    <div class="row">
-      <div class="field filled">
-        <select id="tdCurrency">
-          <option value="RUB">₽ рубль</option>
-          <option value="USD">$ доллар</option>
-          <option value="EUR">€ евро</option>
-          <option value="GEL">₾ лари</option>
-          <option value="TRY">₺ лира</option>
-          <option value="THB">฿ бат</option>
-          <option value="AMD">֏ драм</option>
-          <option value="KZT">₸ тенге</option>
-          <option value="RSD">дин. динар</option>
-          <option value="CNY">¥ юань</option>
-        </select>
-        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-        <label>Валюта сметы</label>
-      </div>
-      <div class="field filled">
-        <select id="tdStatus">
-          <option value="planning">Планируем</option>
-          <option value="active">В пути</option>
-          <option value="done">Съездили</option>
-        </select>
-        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-        <label>Состояние</label>
-      </div>
+    <!-- Валюту не спрашиваем: смета в рублях. Колонка в базе осталась —
+         вернуть выбор, когда понадобится, будет правкой одной формы. -->
+    <div class="field filled">
+      <select id="tdStatus">
+        <option value="planning">Планируем</option>
+        <option value="active">В пути</option>
+        <option value="done">Съездили</option>
+      </select>
+      <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+      <label>Состояние</label>
     </div>
     <div class="field"><textarea id="tdDesc" rows="3" placeholder=" " maxlength="4000"></textarea><label for="tdDesc">Описание (необязательно)</label></div>
     <div class="dlg-actions">
