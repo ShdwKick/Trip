@@ -230,6 +230,7 @@ addEventListener("hashchange", () => { route().catch(console.error); });
 async function showTrips() {
   showOnly("tripsView");
   state.trip = null;
+  document.title = "Куда поедем?";   // ушли из поездки — вернули вопрос без ответа
   const data = await act(() => api("/trips"));
   if (!data) return;
   state.me = data.me;
@@ -295,7 +296,8 @@ function tripCosts() {
 
 function renderTrip() {
   const { trip, members, places } = state.trip;
-  document.title = trip.title + " — Куда поедем?";
+  // Вкладка читается как вопрос и ответ на него: «Куда поедем? — Суздаль».
+  document.title = "Куда поедем? — " + trip.title;
 
   $("thTitle").textContent = trip.title;
   const st = $("thStatus");

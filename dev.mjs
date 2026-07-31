@@ -80,14 +80,28 @@ authCli("adduser", LOGIN, PASSWORD);
 
 /* ---------- запуск ---------- */
 const procs = [];
+let stopping = false;
+
+function stopAll(message) {
+  if (stopping) return;
+  stopping = true;
+  if (message) console.error(`\n${message}`);
+  for (const p of procs) p.kill();
+  process.exit(message ? 1 : 0);
+}
+
 function start(name, cwd, env, color) {
   const p = spawn("node", [...NODE_ARGS, "server.js"], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  p.name = name;
   const print = d => String(d).split("\n").filter(Boolean)
     .filter(l => !l.includes("ExperimentalWarning") && !l.includes("--trace-warnings"))
     .forEach(l => console.log(`${color}${name}\x1b[0m  ${l}`));
   p.stdout.on("data", print);
   p.stderr.on("data", print);
-  p.on("exit", code => { if (code) console.error(`${name} завершился с кодом ${code}`); });
+  // Уронить второй вслед за первым — не грубость, а забота: с живым сервисом и
+  // мёртвым auth страница молча уводит в никуда, и это выглядит как «вход
+  // сломался», хотя сломалось совсем другое.
+  p.on("exit", code => stopAll(`Сервис «${name}» остановился (код ${code}). Останавливаю остальные — работать вдвоём они всё равно перестали.`));
   procs.push(p);
 }
 start("auth", AUTH_DIR, {
@@ -112,6 +126,4 @@ console.log(`
   Ctrl+C — остановить оба сервиса. Данные лежат в .dev/ и не коммитятся.
 `);
 
-for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, () => { for (const p of procs) p.kill(); process.exit(0); });
-}
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => stopAll());
