@@ -1,0 +1,31 @@
+name: bh-trip
+
+services:
+  trip:
+    image: shadowkick/trip:latest
+    container_name: trip
+    restart: unless-stopped
+    labels:
+      # Разрешаем Watchtower обновлять контейнер автоматически, когда в Docker Hub
+      # появляется новый образ. Без метки он его не тронет: на сервере включён
+      # режим строго opt-in (WATCHTOWER_LABEL_ENABLE=true), иначе он трогал бы и
+      # чужие контейнеры. Установка — deploy/watchtower-compose.yml в репозитории Auth.
+      com.centurylinklabs.watchtower.enable: "true"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8790
+      # Общий auth-сервис. ОБЯЗАТЕЛЬНО и ровно тот адрес, что задан у auth в ISSUER:
+      # он подписан внутрь токенов и сверяется побайтово. Без него сервис не стартует.
+      AUTH_ISSUER: https://auth.burninghouse.ru
+      AUTH_CLIENT_ID: trip
+      # Сервис должен быть зарегистрирован в auth как клиент:
+      #   docker compose exec auth node server.js client-add trip "Куда поедем?" https://trip.burninghouse.ru/
+      # Фронт и API на одном домене, CORS не нужен.
+    ports:
+      # Только на localhost — наружу отдаёт nginx на 443 (см. README.md).
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - trip-data:/app/data
+
+volumes:
+  trip-data:

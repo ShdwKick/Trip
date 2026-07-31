@@ -1,0 +1,26 @@
+name: bh-trip
+
+services:
+  trip:
+    build: .
+    image: shadowkick/trip:latest
+    container_name: trip
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8790
+      # Адрес общего auth-сервиса. Обязателен: без него сервер не стартует, потому что
+      # проверять токены нечем. Локально auth поднимается из своего репозитория
+      # (docker-compose.dev.yml там поднимает и его, и потребителей разом).
+      AUTH_ISSUER: http://localhost:8788
+      AUTH_CLIENT_ID: trip
+      # Если фронтенд когда-нибудь будет отдаваться с другого домена:
+      # ALLOWED_ORIGIN: https://trip.burninghouse.ru
+    ports:
+      # По умолчанию слушаем только localhost — наружу отдаёт nginx (см. README.md).
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - trip-data:/app/data
+
+volumes:
+  trip-data:

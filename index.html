@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Куда поедем?</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,600;8..144,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/brand.css">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<!-- Горящий дом под всем приложением. Приглушённый вариант: панели непрозрачны,
+     фон подсвечивает поля вокруг них, а не спорит с содержимым. Искры сносит
+     ветром — повадка поездок (BurningHouse/Design/motion.md). -->
+<div class="bh-backdrop bh-backdrop--page bh-backdrop--quiet" aria-hidden="true">
+  <div class="bh-layer"><div class="bh-glow"></div></div>
+  <div class="bh-layer"><div class="bh-haze"></div></div>
+  <div class="bh-layer bh-sparks bh-sparks--wind" data-bh-sparks="6"></div>
+</div>
+
+<!-- ===================== APP BAR ===================== -->
+<div class="appbar" id="appbar">
+  <div class="appbar-inner">
+    <a class="bh-lockup" href="#/" aria-label="Куда поедем? — BurningHouse">
+      <svg class="bh-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <!-- Градиент объявлен внутри знака: вынесенный наружу не увидит
+               переменные сервиса и знак уедет в чёрный (Design/mark.md). -->
+          <linearGradient id="bhFlameBar" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0" stop-color="var(--flame-base, #0f766e)"/>
+            <stop offset="1" stop-color="var(--flame-tip, #4fe3c1)"/>
+          </linearGradient>
+        </defs>
+        <path class="bh-flame" fill="url(#bhFlameBar)" fill-rule="evenodd"
+              d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
+      </svg>
+      <span class="bh-name">BurningHouse</span>
+      <span class="bh-sep" aria-hidden="true"></span>
+      <span class="bh-service">Куда поедем?</span>
+    </a>
+    <div class="spacer"></div>
+    <div class="sync" id="syncChip" hidden><span class="dot"></span><span id="syncText">Сохранено</span></div>
+    <button class="icon-btn" id="themeBtn" title="Сменить тему" aria-label="Сменить тему"></button>
+    <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+    </button>
+    <button class="icon-btn" id="logoutBtn" title="Выйти" aria-label="Выйти" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- ===================== СБОЙ ВХОДА =====================
+       Своей страницы входа у сервиса нет: неавторизованного человека сразу
+       уводит на auth.burninghouse.ru, и в норме этот экран не показывается
+       вовсе. Он нужен ровно для случая «увести не получилось» — например,
+       auth недоступен: пустая страница без объяснения выглядела бы поломкой. -->
+  <section id="authView" hidden>
+    <div class="hero panel">
+      <div class="join-ic">
+        <svg class="icon xl" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.3-7 9-4-.7-7-4.6-7-9V7l7-4z"/><path d="M12 11v3"/><circle cx="12" cy="8.5" r=".6" fill="currentColor" stroke="none"/></svg>
+      </div>
+      <h1 id="authTitle">Нужен вход</h1>
+      <p class="lead" id="authNote">Сейчас перенесём на страницу входа BurningHouse.</p>
+      <div class="hero-actions">
+        <button class="btn filled flame" id="loginBtn">Войти</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== СПИСОК ПОЕЗДОК ===================== -->
+  <section id="tripsView" hidden>
+    <div class="view-head">
+      <div>
+        <h1>Мои поездки</h1>
+        <div class="sub" id="tripsSub">—</div>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn filled" id="newTripBtn">
+        <svg class="icon sm" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Новая поездка
+      </button>
+    </div>
+    <div class="trip-grid" id="tripGrid"></div>
+    <div class="empty" id="tripsEmpty" hidden>
+      <svg class="icon xl" viewBox="0 0 24 24"><path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <h3>Пока ни одной поездки</h3>
+      <p>Создайте первую — потом добавите места и позовёте попутчиков.</p>
+      <button class="btn tonal" onclick="openTripDialog()">Создать поездку</button>
+    </div>
+  </section>
+
+  <!-- ===================== ОДНА ПОЕЗДКА ===================== -->
+  <section id="tripView" hidden>
+    <a class="back" href="#/"><svg class="icon sm" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>Все поездки</a>
+
+    <div class="panel trip-head">
+      <div class="th-main">
+        <div class="th-title">
+          <h1 id="thTitle">—</h1>
+          <span class="chip status" id="thStatus"></span>
+        </div>
+        <div class="th-meta" id="thMeta"></div>
+        <p class="th-desc" id="thDesc" hidden></p>
+      </div>
+      <div class="th-actions">
+        <button class="btn tonal" id="shareBtn">
+          <svg class="icon sm" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="10.5" x2="15.4" y2="6.5"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/></svg>
+          Позвать
+        </button>
+        <button class="icon-btn" id="tripEditBtn" title="Изменить поездку" aria-label="Изменить поездку">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
+        </button>
+      </div>
+      <div class="th-stats" id="thStats"></div>
+      <div class="th-people" id="thPeople"></div>
+    </div>
+
+    <div class="list-toolbar">
+      <div class="mini-seg" id="placeFilter">
+        <button class="sel" data-filter="all">Все</button>
+        <button data-filter="todo">Осталось</button>
+        <button data-filter="done">Отмечено</button>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn text" id="routeAllBtn">
+        <svg class="icon sm" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M9 19h6a4 4 0 0 0 0-8H9a4 4 0 0 1 0-8h6"/></svg>
+        Маршрут
+      </button>
+      <button class="btn filled" id="newPlaceBtn">
+        <svg class="icon sm" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Место
+      </button>
+    </div>
+
+    <div id="placeList"></div>
+
+    <div class="empty" id="placesEmpty" hidden>
+      <svg class="icon xl" viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <h3>Список пуст</h3>
+      <p>Добавьте первое место: музей, отель, кафе — что угодно, куда собираетесь.</p>
+      <button class="btn tonal" onclick="openPlaceDialog()">Добавить место</button>
+    </div>
+  </section>
+
+  <!-- ===================== ПРИГЛАШЕНИЕ ===================== -->
+  <section id="joinView" hidden>
+    <div class="panel join-card">
+      <div class="join-ic">
+        <svg class="icon xl" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><path d="M17 11h5M19.5 8.5v5"/></svg>
+      </div>
+      <h1 id="joinTitle">Приглашение</h1>
+      <div class="join-meta" id="joinMeta"></div>
+      <div class="join-actions">
+        <button class="btn filled" id="joinBtn">Присоединиться</button>
+        <a class="btn text" href="#/">Не сейчас</a>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ===================== ДИАЛОГ ПОЕЗДКИ ===================== -->
+<div class="scrim" id="tripScrim">
+  <div class="dialog">
+    <h3 id="tripDlgTitle">Новая поездка</h3>
+    <div class="field"><input id="tdTitle" type="text" placeholder=" " maxlength="200"><label for="tdTitle">Название</label></div>
+    <div class="field"><input id="tdDest" type="text" placeholder=" " maxlength="200"><label for="tdDest">Куда (город, страна)</label></div>
+    <div class="row">
+      <div class="field filled"><input id="tdFrom" type="date"><label for="tdFrom">С</label></div>
+      <div class="field filled"><input id="tdTo" type="date"><label for="tdTo">По</label></div>
+    </div>
+    <div class="row">
+      <div class="field filled">
+        <select id="tdCurrency">
+          <option value="RUB">₽ рубль</option>
+          <option value="USD">$ доллар</option>
+          <option value="EUR">€ евро</option>
+          <option value="GEL">₾ лари</option>
+          <option value="TRY">₺ лира</option>
+          <option value="THB">฿ бат</option>
+          <option value="AMD">֏ драм</option>
+          <option value="KZT">₸ тенге</option>
+          <option value="RSD">дин. динар</option>
+          <option value="CNY">¥ юань</option>
+        </select>
+        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        <label>Валюта сметы</label>
+      </div>
+      <div class="field filled">
+        <select id="tdStatus">
+          <option value="planning">Планируем</option>
+          <option value="active">В пути</option>
+          <option value="done">Съездили</option>
+        </select>
+        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        <label>Состояние</label>
+      </div>
+    </div>
+    <div class="field"><textarea id="tdDesc" rows="3" placeholder=" " maxlength="4000"></textarea><label for="tdDesc">Описание (необязательно)</label></div>
+    <div class="dlg-actions">
+      <button class="btn text danger" id="tripDeleteBtn" hidden>Удалить</button>
+      <button class="btn text" id="tripLeaveBtn" hidden>Выйти из поездки</button>
+      <div class="spacer"></div>
+      <button class="btn text" data-close>Отмена</button>
+      <button class="btn filled" id="tripSaveBtn">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ДИАЛОГ МЕСТА ===================== -->
+<div class="scrim" id="placeScrim">
+  <div class="dialog wide">
+    <h3 id="placeDlgTitle">Новое место</h3>
+
+    <div class="field"><input id="pdTitle" type="text" placeholder=" " maxlength="200"><label for="pdTitle">Название</label></div>
+
+    <div class="kind-row" id="pdKinds"></div>
+
+    <div class="row">
+      <div class="field filled"><input id="pdDay" type="date"><label for="pdDay">День</label></div>
+      <div class="field filled" style="max-width:120px"><input id="pdFrom" type="time"><label for="pdFrom">Во сколько</label></div>
+      <div class="field filled" style="max-width:120px"><input id="pdTo" type="time"><label for="pdTo">До</label></div>
+    </div>
+
+    <div class="row">
+      <div class="field"><input id="pdCost" type="text" inputmode="decimal" placeholder=" "><label for="pdCost">Цена</label></div>
+      <div class="field filled">
+        <select id="pdCostPer">
+          <option value="total">за всё</option>
+          <option value="person">с человека</option>
+        </select>
+        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        <label>Считать</label>
+      </div>
+    </div>
+
+    <div class="field has-action">
+      <input id="pdMap" type="url" placeholder=" " maxlength="2000">
+      <label for="pdMap">Ссылка с карты</label>
+      <button type="button" class="icon-btn xs" id="pdMapBtn" title="Определить координаты" aria-label="Определить координаты">
+        <svg class="icon sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+      </button>
+    </div>
+    <div class="hint" id="pdGeo">Вставьте ссылку из Яндекс.Карт, Google Maps или 2ГИС — координаты возьмутся сами, и появится кнопка маршрута.</div>
+
+    <div class="field"><input id="pdAddress" type="text" placeholder=" " maxlength="400"><label for="pdAddress">Адрес (необязательно)</label></div>
+    <div class="field"><input id="pdLink" type="url" placeholder=" " maxlength="1000"><label for="pdLink">Ссылка: бронь, билеты, сайт</label></div>
+    <div class="field"><textarea id="pdNote" rows="3" placeholder=" " maxlength="4000"></textarea><label for="pdNote">Заметка</label></div>
+
+    <div class="photos-block">
+      <div class="pb-head">
+        <span>Фотографии</span>
+        <button type="button" class="btn text" id="pdPhotoBtn">
+          <svg class="icon sm" viewBox="0 0 24 24"><path d="M3 7h3l2-2h8l2 2h3v13H3z"/><circle cx="12" cy="13" r="4"/></svg>
+          Добавить
+        </button>
+        <input type="file" id="pdPhotoInput" accept="image/*" multiple hidden>
+      </div>
+      <div class="thumbs" id="pdThumbs"></div>
+      <div class="hint" id="pdPhotoHint">Снимки уменьшаются прямо в браузере — на сервер уходит примерно 200 КБ вместо нескольких мегабайт.</div>
+    </div>
+
+    <div class="dlg-actions">
+      <button class="btn text danger" id="placeDeleteBtn" hidden>Удалить</button>
+      <div class="spacer"></div>
+      <button class="btn text" data-close>Отмена</button>
+      <button class="btn filled" id="placeSaveBtn">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ДИАЛОГ ПРИГЛАШЕНИЯ ===================== -->
+<div class="scrim" id="shareScrim">
+  <div class="dialog">
+    <h3>Позвать в поездку</h3>
+    <p class="desc">Кто откроет ссылку и войдёт в BurningHouse — станет участником: сможет добавлять места, отмечать пункты и загружать фото.</p>
+    <div class="share-link">
+      <input id="shareUrl" type="text" readonly>
+      <button class="btn tonal" id="shareCopyBtn">Копировать</button>
+    </div>
+    <div class="share-code">Код для диктовки голосом: <b id="shareCode">—</b></div>
+    <div class="dlg-actions">
+      <button class="btn text danger" id="shareRevokeBtn">Закрыть доступ</button>
+      <div class="spacer"></div>
+      <button class="btn text" id="shareRenewBtn">Новая ссылка</button>
+      <button class="btn filled" data-close>Готово</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ДИАЛОГ МАРШРУТА ===================== -->
+<div class="scrim" id="routeScrim">
+  <div class="dialog">
+    <h3>Маршрут</h3>
+    <div class="field filled">
+      <select id="rtDay"></select>
+      <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+      <label>По какому дню</label>
+    </div>
+    <div class="mini-seg" id="rtMode" style="margin-top:14px">
+      <button class="sel" data-mode="auto">На машине</button>
+      <button data-mode="pedestrian">Пешком</button>
+      <button data-mode="transit">Транспортом</button>
+    </div>
+    <div class="route-points" id="rtPoints"></div>
+    <div class="dlg-actions">
+      <div class="spacer"></div>
+      <button class="btn text" data-close>Закрыть</button>
+      <button class="btn tonal" id="rtGoogleBtn">Google Maps</button>
+      <button class="btn filled" id="rtYandexBtn">Яндекс.Карты</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ПРОСМОТР ФОТО ===================== -->
+<div class="scrim viewer" id="photoScrim">
+  <button class="viewer-close icon-btn" data-close aria-label="Закрыть">
+    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+  <button class="viewer-nav prev icon-btn" id="photoPrev" aria-label="Предыдущее">
+    <svg class="icon" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>
+  <img id="photoImg" alt="">
+  <button class="viewer-nav next icon-btn" id="photoNext" aria-label="Следующее">
+    <svg class="icon" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+  </button>
+  <div class="viewer-bar">
+    <span id="photoCaption"></span>
+    <button class="btn text danger" id="photoDeleteBtn">Удалить</button>
+  </div>
+</div>
+
+<!-- ===================== ПОДТВЕРЖДЕНИЕ ===================== -->
+<div class="scrim" id="confirmScrim">
+  <div class="dialog narrow">
+    <h3 id="cfTitle">Точно?</h3>
+    <p class="desc" id="cfText"></p>
+    <div class="dlg-actions">
+      <div class="spacer"></div>
+      <button class="btn text" data-close>Отмена</button>
+      <button class="btn filled danger" id="cfOk">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<div class="snack" id="snack"></div>
+
+<script src="assets/auth-client.js"></script>
+<script src="assets/brand.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
