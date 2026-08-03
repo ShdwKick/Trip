@@ -260,6 +260,109 @@ ok("выключенный показ убирает имя обратно", r.b
   JSON.stringify(r.body.members));
 me.access_token = fresh.access_token;   // дальше работаем свежим
 
+/* ---------- 10.7. Счета: кто платил и как делится ---------- */
+const myId = JSON.parse(Buffer.from(me.access_token.split(".")[1], "base64url")).sub;
+const friendId = JSON.parse(Buffer.from(friend.access_token.split(".")[1], "base64url")).sub;
+
+// Попутчик вышел из поездки в п.12 — сейчас он ещё в ней, но ссылку мы уже
+// закрыли, поэтому вернём его напрямую: для счетов нужны двое.
+r = await asJson(me.access_token, `/trips/${tripId}/code`, { method: "POST" });
+const code2 = r.body.joinCode;
+await asJson(friend.access_token, `/invite/${code2}/join`, { method: "POST" });
+
+r = await asJson(me.access_token, `/trips/${tripId}/places`, {
+  method: "POST", body: { title: "Ужин в «Шоти»", kind: "food", costAmount: 3000, costPer: "total", paidBy: myId },
+});
+let bill = r.body.places.find(p => p.title === "Ужин в «Шоти»");
+ok("плательщик сохранён", bill?.paidBy === myId, JSON.stringify({ paidBy: bill?.paidBy, split: bill?.split }));
+ok("по умолчанию делится поровну", bill?.split === "equal" && bill.shares.length === 0);
+
+r = await asJson(me.access_token, `/places/${bill.id}`, {
+  method: "PATCH",
+  body: { split: "custom", shares: [{ userId: myId, amount: 1800 }, { userId: friendId, amount: 1200 }] },
+});
+bill = r.body.places.find(p => p.id === bill.id);
+ok("свои суммы сохранились", bill.split === "custom" && bill.shares.length === 2
+  && bill.shares.find(s => s.userId === friendId).amount === 1200, JSON.stringify(bill.shares));
+
+// Доля постороннего в своде долгов превратилась бы в долг призрака.
+r = await asJson(me.access_token, `/places/${bill.id}`, {
+  method: "PATCH", body: { shares: [{ userId: myId, amount: 3000 }, { userId: "00000000-0000-0000-0000-000000000000", amount: 500 }] },
+});
+bill = r.body.places.find(p => p.id === bill.id);
+ok("доля не-участника отброшена", bill.shares.length === 1 && bill.shares[0].userId === myId, JSON.stringify(bill.shares));
+
+r = await asJson(me.access_token, `/places/${bill.id}`, { method: "PATCH", body: { paidBy: "00000000-0000-0000-0000-000000000000" } });
+bill = r.body.places.find(p => p.id === bill.id);
+ok("плательщиком нельзя назначить постороннего", bill.paidBy === null);
+
+// Возврат к «поровну» обязан убрать доли: иначе они остались бы висеть и
+// молча пересилили бы новый режим при следующем чтении.
+r = await asJson(me.access_token, `/places/${bill.id}`, { method: "PATCH", body: { split: "equal", shares: [], paidBy: myId } });
+bill = r.body.places.find(p => p.id === bill.id);
+ok("возврат к «поровну» стирает доли", bill.split === "equal" && bill.shares.length === 0);
+
+/* ---------- 10.75. Позиции чека ---------- */
+r = await asJson(me.access_token, `/trips/${tripId}/places`, {
+  method: "POST", body: { title: "Чайхана", kind: "food", paidBy: myId },
+});
+const check = r.body.places.find(p => p.title === "Чайхана");
+r = await asJson(me.access_token, `/places/${check.id}/items`, {
+  method: "POST",
+  body: {
+    items: [
+      { title: "Чайник улуна", amount: 900, users: [myId, friendId] },   // делим на двоих
+      { title: "Хачапури", amount: 600, users: [myId] },                  // только моё
+      { title: "Салат", amount: 400 },                                    // никто не взял
+    ],
+  },
+});
+let dish = r.body.places.find(p => p.id === check.id);
+ok("позиции добавлены", dish.items.length === 3, JSON.stringify(dish.items.map(i => i.title)));
+ok("цена места собралась из позиций", dish.costAmount === 1900 && dish.costPer === "total", String(dish.costAmount));
+ok("режим переключился на «по позициям»", dish.split === "items");
+ok("кто взял позицию — сохранилось", dish.items.find(i => i.title === "Чайник улуна").users.length === 2);
+ok("неразобранная позиция без людей", dish.items.find(i => i.title === "Салат").users.length === 0);
+
+const tea = dish.items.find(i => i.title === "Чайник улуна");
+r = await asJson(friend.access_token, `/items/${tea.id}/take`, { method: "POST" });
+dish = r.body.places.find(p => p.id === check.id);
+ok("«моё» снимается тем же нажатием", dish.items.find(i => i.id === tea.id).users.length === 1);
+
+r = await asJson(friend.access_token, `/items/${tea.id}`, { method: "PATCH", body: { amount: 1000, users: [myId, friendId] } });
+dish = r.body.places.find(p => p.id === check.id);
+ok("цена позиции правится, сумма места пересчитывается", dish.costAmount === 2000, String(dish.costAmount));
+
+r = await asJson(me.access_token, `/items/${tea.id}`, { method: "PATCH", body: { users: ["00000000-0000-0000-0000-000000000000"] } });
+dish = r.body.places.find(p => p.id === check.id);
+ok("посторонний в позицию не попадает", dish.items.find(i => i.id === tea.id).users.length === 0);
+
+for (const it of dish.items) await asJson(me.access_token, "/items/" + it.id, { method: "DELETE" });
+r = await asJson(me.access_token, "/trips/" + tripId);
+dish = r.body.places.find(p => p.id === check.id);
+ok("без позиций режим возвращается к «поровну»", dish.split === "equal" && dish.items.length === 0);
+await asJson(me.access_token, "/places/" + check.id, { method: "DELETE" });
+
+/* ---------- 10.8. Переводы ---------- */
+r = await asJson(friend.access_token, `/trips/${tripId}/settlements`, { method: "POST", body: { toUser: myId, amount: 1500 } });
+ok("перевод отмечен", r.status === 200 && r.body.settlements.length === 1, JSON.stringify(r.body.settlements));
+const settlement = r.body.settlements[0];
+ok("перевод записан от имени отправителя", settlement.fromUser === friendId && settlement.toUser === myId && settlement.amount === 1500);
+ok("подтверждения ещё нет", settlement.confirmedAt === null);
+
+r = await asJson(friend.access_token, `/settlements/${settlement.id}/confirm`, { method: "POST" });
+ok("отправитель не может подтвердить получение", r.status === 403);
+r = await asJson(me.access_token, `/settlements/${settlement.id}/confirm`, { method: "POST" });
+ok("получатель подтверждает", r.status === 200 && r.body.settlements[0].confirmedAt > 0);
+
+r = await asJson(me.access_token, `/trips/${tripId}/settlements`, { method: "POST", body: { toUser: myId, amount: 100 } });
+ok("перевод самому себе отбит", r.status === 400);
+r = await asJson(me.access_token, `/trips/${tripId}/settlements`, { method: "POST", body: { toUser: friendId, amount: -5 } });
+ok("отрицательная сумма отбита", r.status === 400);
+
+r = await asJson(me.access_token, `/settlements/${settlement.id}`, { method: "DELETE" });
+ok("сторона перевода может убрать запись", r.status === 200 && r.body.settlements.length === 0);
+
 /* ---------- 11. Фотографии ---------- */
 // Минимальный настоящий PNG 1×1 — важна именно сигнатура файла: сервер верит ей,
 // а не заголовку Content-Type.

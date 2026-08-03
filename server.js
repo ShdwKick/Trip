@@ -75,14 +75,14 @@ db.exec(`
   );
 
   -- Участие. Своей таблицы пользователей у сервиса нет и быть не должно:
-  -- ключ — стабильный user_id из токена, username и name лежат рядом только
-  -- чтобы показывать подпись в интерфейсе. Имя (name) есть, лишь когда человек
-  -- сам включил его показ в кабинете BurningHouse; иначе остаётся логин.
+  -- ключ — стабильный user_id из токена, остальное лежит рядом только чтобы
+  -- показывать подпись в интерфейсе и предлагать перевод.
+  -- name и phone добавляются миграцией ниже (таблица старше их) — как и у мест,
+  -- объявление держим в одном месте, чтобы оно не разошлось.
   CREATE TABLE IF NOT EXISTS trip_members (
     trip_id   TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
     user_id   TEXT NOT NULL,
     username  TEXT,
-    name      TEXT,
     role      TEXT NOT NULL DEFAULT 'member',   -- owner | member
     joined_at INTEGER NOT NULL,
     PRIMARY KEY (trip_id, user_id)
@@ -92,11 +92,13 @@ db.exec(`
   -- Место = пункт чек-листа. Поля именованные, а не общий JSON: по ним считают
   -- смету, строят маршрут и раскладывают по дням — в блобе это всё пришлось бы
   -- разбирать на каждый запрос.
+  -- paid_by и split добавляются миграцией ниже (таблица старше их), поэтому
+  -- здесь их нет: держать объявление в двух местах — верный способ разойтись.
   CREATE TABLE IF NOT EXISTS places (
     id            TEXT PRIMARY KEY,
     trip_id       TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
     title         TEXT NOT NULL,
-    kind          TEXT NOT NULL DEFAULT 'spot',  -- stay|food|activity|transport|sight|spot
+    kind          TEXT NOT NULL DEFAULT 'spot',  -- stay|food|transport|sight|spot
     note          TEXT,
     address       TEXT,
     map_url       TEXT,
@@ -134,11 +136,67 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_photos_trip  ON photos(trip_id);
   CREATE INDEX IF NOT EXISTS idx_photos_place ON photos(place_id);
+
+  -- Доли по счёту, когда «поровну» не подходит: общий счёт в ресторане, где
+  -- каждый ел на своё. Хранятся явно и только для split='custom' — при
+  -- «поровну» доли считаются от текущего состава, чтобы новый попутчик
+  -- автоматически попадал в уже заведённые счета.
+  CREATE TABLE IF NOT EXISTS place_shares (
+    place_id TEXT NOT NULL REFERENCES places(id) ON DELETE CASCADE,
+    user_id  TEXT NOT NULL,
+    amount   REAL NOT NULL,
+    PRIMARY KEY (place_id, user_id)
+  );
+
+  -- Позиции чека. Появились ради самого частого спора в поездке: общий счёт в
+  -- ресторане, где каждый ел своё, а чайник брали на троих. Позицию «берут» те,
+  -- кто её заказывал, и её цена делится между ними — а не поровну на всех.
+  CREATE TABLE IF NOT EXISTS place_items (
+    id         TEXT PRIMARY KEY,
+    place_id   TEXT NOT NULL REFERENCES places(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL,
+    amount     REAL NOT NULL,          -- цена позиции целиком, уже с учётом количества
+    qty        REAL,                   -- количество, если разобрали из чека; только для показа
+    sort_order REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_items_place ON place_items(place_id);
+
+  -- Кто взял позицию. Пусто — позицию никто не разобрал, тогда она делится на
+  -- всех: молча повесить её на плательщика было бы несправедливо.
+  CREATE TABLE IF NOT EXISTS place_item_users (
+    item_id TEXT NOT NULL REFERENCES place_items(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (item_id, user_id)
+  );
+
+  -- Переводы между участниками. Статус операции в банке нам недоступен, поэтому
+  -- запись — это заявление «я перевёл», а подтверждение получателя — отдельное
+  -- поле. Пока не подтверждено, долг считается закрытым, но помечен ожидающим:
+  -- иначе человек, который уже перевёл, снова видел бы себя должником.
+  CREATE TABLE IF NOT EXISTS settlements (
+    id           TEXT PRIMARY KEY,
+    trip_id      TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    from_user    TEXT NOT NULL,
+    to_user      TEXT NOT NULL,
+    amount       REAL NOT NULL,
+    note         TEXT,
+    created_at   INTEGER NOT NULL,
+    confirmed_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_settlements_trip ON settlements(trip_id);
 `);
 
-// Колонка появилась позже самой таблицы: в auth завели необязательное имя,
-// и базы, созданные до этого, о нём не знают. CREATE TABLE их не тронет.
-try { db.exec("ALTER TABLE trip_members ADD COLUMN name TEXT"); } catch { /* уже есть */ }
+// Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
+// знают, а CREATE TABLE IF NOT EXISTS их не тронет.
+for (const sql of [
+  "ALTER TABLE trip_members ADD COLUMN name TEXT",         // необязательное имя из auth
+  "ALTER TABLE trip_members ADD COLUMN phone TEXT",        // номер для перевода, если разрешён
+  "ALTER TABLE places ADD COLUMN paid_by TEXT",            // кто заплатил по счёту
+  "ALTER TABLE places ADD COLUMN split TEXT NOT NULL DEFAULT 'equal'",  // equal | custom
+]) {
+  try { db.exec(sql); } catch { /* уже есть */ }
+}
 
 const stmt = {
   // Ссылку на базу держим здесь намеренно. После инициализации `db` больше нигде
@@ -166,8 +224,8 @@ const stmt = {
   setCode:     db.prepare("UPDATE trips SET join_code = ?, updated_at = ? WHERE id = ?"),
 
   member:      db.prepare("SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?"),
-  members:     db.prepare("SELECT user_id, username, name, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
-  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,name,role,joined_at) VALUES (?,?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name"),
+  members:     db.prepare("SELECT user_id, username, name, phone, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
+  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,name,phone,role,joined_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name, phone = excluded.phone"),
   dropMember:  db.prepare("DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?"),
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM trip_members WHERE trip_id = ? AND role = 'owner'"),
 
@@ -175,11 +233,38 @@ const stmt = {
   place:       db.prepare("SELECT * FROM places WHERE id = ?"),
   insertPlace: db.prepare(`INSERT INTO places
       (id,trip_id,title,kind,note,address,map_url,lat,lon,link_url,day,time_from,time_to,
-       cost_amount,cost_currency,cost_per,done,done_by,done_at,sort_order,created_by,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+       cost_amount,cost_currency,cost_per,paid_by,split,done,done_by,done_at,sort_order,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   deletePlace: db.prepare("DELETE FROM places WHERE id = ?"),
   maxOrder:    db.prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM places WHERE trip_id = ?"),
   setOrder:    db.prepare("UPDATE places SET sort_order = ?, updated_at = ? WHERE id = ? AND trip_id = ?"),
+
+  sharesOfTrip: db.prepare(`SELECT s.place_id, s.user_id, s.amount FROM place_shares s
+      JOIN places p ON p.id = s.place_id WHERE p.trip_id = ?`),
+  clearShares:  db.prepare("DELETE FROM place_shares WHERE place_id = ?"),
+  addShare:     db.prepare("INSERT INTO place_shares (place_id, user_id, amount) VALUES (?,?,?) ON CONFLICT(place_id,user_id) DO UPDATE SET amount = excluded.amount"),
+
+  itemsOfTrip:  db.prepare(`SELECT i.* FROM place_items i JOIN places p ON p.id = i.place_id
+      WHERE p.trip_id = ? ORDER BY i.sort_order, i.created_at`),
+  itemUsersOfTrip: db.prepare(`SELECT u.item_id, u.user_id FROM place_item_users u
+      JOIN place_items i ON i.id = u.item_id JOIN places p ON p.id = i.place_id WHERE p.trip_id = ?`),
+  item:         db.prepare("SELECT * FROM place_items WHERE id = ?"),
+  itemsOfPlace: db.prepare("SELECT * FROM place_items WHERE place_id = ? ORDER BY sort_order, created_at"),
+  addItem:      db.prepare("INSERT INTO place_items (id,place_id,title,amount,qty,sort_order,created_at) VALUES (?,?,?,?,?,?,?)"),
+  updateItem:   db.prepare("UPDATE place_items SET title = ?, amount = ? WHERE id = ?"),
+  dropItem:     db.prepare("DELETE FROM place_items WHERE id = ?"),
+  maxItemOrder: db.prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM place_items WHERE place_id = ?"),
+  itemUsers:    db.prepare("SELECT user_id FROM place_item_users WHERE item_id = ?"),
+  clearItemUsers: db.prepare("DELETE FROM place_item_users WHERE item_id = ?"),
+  addItemUser:  db.prepare("INSERT INTO place_item_users (item_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING"),
+  dropItemUser: db.prepare("DELETE FROM place_item_users WHERE item_id = ? AND user_id = ?"),
+  sumItems:     db.prepare("SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS n FROM place_items WHERE place_id = ?"),
+
+  settlements:  db.prepare("SELECT * FROM settlements WHERE trip_id = ? ORDER BY created_at"),
+  settlement:   db.prepare("SELECT * FROM settlements WHERE id = ?"),
+  addSettlement: db.prepare("INSERT INTO settlements (id,trip_id,from_user,to_user,amount,note,created_at,confirmed_at) VALUES (?,?,?,?,?,?,?,?)"),
+  confirmSettlement: db.prepare("UPDATE settlements SET confirmed_at = ? WHERE id = ?"),
+  dropSettlement: db.prepare("DELETE FROM settlements WHERE id = ?"),
 
   photosOfTrip: db.prepare("SELECT id, place_id, mime, bytes, caption, uploaded_by, created_at FROM photos WHERE trip_id = ? ORDER BY created_at"),
   photo:        db.prepare("SELECT * FROM photos WHERE id = ?"),
@@ -228,7 +313,10 @@ const num = v => {
 };
 const oneOf = (v, list) => (list.includes(v) ? v : null);
 
-const KINDS = ["stay", "food", "activity", "transport", "sight", "spot"];
+// «activity» убран из списка: у мест, заведённых раньше, значение в базе
+// осталось и показывается как «Разное» — переписывать чужие строки ради
+// косметики не стоит.
+const KINDS = ["stay", "food", "transport", "sight", "spot"];
 const STATUSES = ["planning", "active", "done"];
 
 function json(res, code, obj) {
@@ -405,13 +493,17 @@ function access(tripId, user) {
   if (!trip) return null;
   const member = stmt.member.get(tripId, user.id);
   if (!member) return null;
-  // Раз пользователь пришёл — заодно освежаем логин и имя: и то и другое живёт
-  // в auth и могло измениться там, а подписи в интерфейсе берутся отсюда. Имя
-  // ещё и включается-выключается пользователем, поэтому сверяем в обе стороны.
-  if ((user.username && member.username !== user.username) || (user.name || null) !== (member.name || null)) {
-    stmt.addMember.run(tripId, user.id, user.username, user.name || null, member.role, member.joined_at);
+  // Раз пользователь пришёл — заодно освежаем логин, имя и телефон: всё это
+  // живёт в auth и могло измениться там, а показывается отсюда. Имя и телефон
+  // ещё и включаются-выключаются пользователем, поэтому сверяем в обе стороны:
+  // выключил показ — копия обязана исчезнуть, а не остаться навсегда.
+  if ((user.username && member.username !== user.username)
+      || (user.name || null) !== (member.name || null)
+      || (user.phone || null) !== (member.phone || null)) {
+    stmt.addMember.run(tripId, user.id, user.username, user.name || null, user.phone || null, member.role, member.joined_at);
     member.username = user.username;
     member.name = user.name || null;
+    member.phone = user.phone || null;
   }
   return { trip, member, isOwner: member.role === "owner" };
 }
@@ -426,6 +518,24 @@ function tripPayload(trip, me) {
     if (!byPlace.has(key)) byPlace.set(key, []);
     byPlace.get(key).push({ id: ph.id, mime: ph.mime, bytes: ph.bytes, caption: ph.caption, uploadedBy: ph.uploaded_by, createdAt: ph.created_at });
   }
+  const sharesOf = new Map();
+  for (const s of stmt.sharesOfTrip.all(trip.id)) {
+    if (!sharesOf.has(s.place_id)) sharesOf.set(s.place_id, []);
+    sharesOf.get(s.place_id).push({ userId: s.user_id, amount: s.amount });
+  }
+  const itemUsers = new Map();
+  for (const u of stmt.itemUsersOfTrip.all(trip.id)) {
+    if (!itemUsers.has(u.item_id)) itemUsers.set(u.item_id, []);
+    itemUsers.get(u.item_id).push(u.user_id);
+  }
+  const itemsOf = new Map();
+  for (const it of stmt.itemsOfTrip.all(trip.id)) {
+    if (!itemsOf.has(it.place_id)) itemsOf.set(it.place_id, []);
+    itemsOf.get(it.place_id).push({
+      id: it.id, title: it.title, amount: it.amount, qty: it.qty,
+      users: itemUsers.get(it.id) || [], sortOrder: it.sort_order,
+    });
+  }
   return {
     trip: {
       id: trip.id, title: trip.title, destination: trip.destination, description: trip.description,
@@ -433,22 +543,78 @@ function tripPayload(trip, me) {
       joinCode: trip.join_code, createdBy: trip.created_by, createdAt: trip.created_at, updatedAt: trip.updated_at,
       myRole: me.role,
     },
-    members: stmt.members.all(trip.id).map(m => ({ userId: m.user_id, username: m.username, name: m.name, role: m.role, joinedAt: m.joined_at })),
+    // Телефон отдаём только внутри поездки — это группа, которую собрал сам
+    // человек. В превью приглашения (его видит любой со ссылкой) номеров нет.
+    members: stmt.members.all(trip.id).map(m => ({
+      userId: m.user_id, username: m.username, name: m.name, phone: m.phone,
+      role: m.role, joinedAt: m.joined_at,
+    })),
     places: places.map(p => ({
       id: p.id, title: p.title, kind: p.kind, note: p.note, address: p.address,
       mapUrl: p.map_url, lat: p.lat, lon: p.lon, linkUrl: p.link_url,
       day: p.day, timeFrom: p.time_from, timeTo: p.time_to,
       costAmount: p.cost_amount, costCurrency: p.cost_currency, costPer: p.cost_per,
+      paidBy: p.paid_by, split: p.split || "equal", shares: sharesOf.get(p.id) || [],
+      items: itemsOf.get(p.id) || [],
       done: !!p.done, doneBy: p.done_by, doneAt: p.done_at,
       sortOrder: p.sort_order, createdBy: p.created_by, updatedAt: p.updated_at,
       photos: byPlace.get(p.id) || [],
     })),
     tripPhotos: byPlace.get("") || [],
+    settlements: stmt.settlements.all(trip.id).map(s => ({
+      id: s.id, fromUser: s.from_user, toUser: s.to_user, amount: s.amount,
+      note: s.note, createdAt: s.created_at, confirmedAt: s.confirmed_at,
+    })),
   };
 }
 
+/**
+ * Доли по счёту. Пишутся целиком: присланный список — это и есть новое
+ * состояние. Частичное обновление здесь означало бы, что доля исчезнувшего из
+ * списка человека молча остаётся висеть.
+ *
+ * Чужие user_id отбрасываем: доля не участника поездки в своде долгов
+ * превратилась бы в долг призрака, которого не видно в составе.
+ */
+function writeShares(placeId, tripId, shares) {
+  if (shares === undefined) return;
+  stmt.clearShares.run(placeId);
+  if (!Array.isArray(shares)) return;
+  const members = new Set(stmt.members.all(tripId).map(m => m.user_id));
+  for (const s of shares.slice(0, 100)) {
+    const userId = String(s?.userId || "");
+    const amount = num(s?.amount);
+    if (!members.has(userId) || amount === null) continue;
+    stmt.addShare.run(placeId, userId, Math.max(0, Math.round(amount * 100) / 100));
+  }
+}
+
+const round2 = v => Math.round(v * 100) / 100;
+
+/**
+ * Позиции — источник правды для суммы места: пока они есть, цена места равна их
+ * сумме. Иначе смета считалась бы по одной цифре, а «моя доля» — по другой, и
+ * расхождение всплыло бы только при расчёте, когда спорить уже поздно.
+ * Чаевые и обслуживание заводят такой же позицией.
+ */
+function syncCostFromItems(placeId) {
+  const place = stmt.place.get(placeId);
+  if (!place) return;
+  const { total, n } = stmt.sumItems.get(placeId);
+  if (n) updateRow("places", placeId, { cost_amount: round2(total), cost_per: "total", split: "items", updated_at: now() });
+  else if (place.split === "items") updateRow("places", placeId, { split: "equal", updated_at: now() });
+}
+
+/** Кто взял позицию. Чужие user_id отбрасываем — как и в долях. */
+function writeItemUsers(itemId, tripId, users) {
+  if (!Array.isArray(users)) return;
+  stmt.clearItemUsers.run(itemId);
+  const members = new Set(stmt.members.all(tripId).map(m => m.user_id));
+  for (const id of users.slice(0, 50)) if (members.has(String(id))) stmt.addItemUser.run(itemId, String(id));
+}
+
 /** Поля места из тела запроса. Пришло только то, что редактировали, — остальное не трогаем. */
-function placeFields(body, currency) {
+function placeFields(body, currency, tripId) {
   const out = {};
   const put = (key, value) => { if (value !== undefined) out[key] = value; };
 
@@ -468,6 +634,13 @@ function placeFields(body, currency) {
   if ("costCurrency" in body) out.cost_currency = str(body.costCurrency, 8);
   if ("costPer" in body)      out.cost_per = oneOf(body.costPer, ["total", "person"]) || "total";
   if ("mapUrl" in body)       out.map_url = str(body.mapUrl, 2000);
+  if ("split" in body)        out.split = oneOf(body.split, ["equal", "custom", "items"]) || "equal";
+  if ("paidBy" in body) {
+    // Плательщиком может быть только участник поездки: иначе в своде долгов
+    // появился бы кредитор, которого в составе нет и которому нельзя перевести.
+    const id = str(body.paidBy, 64);
+    out.paid_by = id && stmt.member.get(tripId, id) ? id : null;
+  }
   // Координаты приходят разобранными с фронта (там же, где показывается результат),
   // но проверяем их ещё раз здесь: фронт — не граница доверия.
   if ("lat" in body || "lon" in body) {
@@ -586,7 +759,7 @@ async function api(req, res, url, user) {
         newJoinCode(),
         user.id, ts, ts,
       );
-      stmt.addMember.run(id, user.id, user.username || null, user.name || null, "owner", ts);
+      stmt.addMember.run(id, user.id, user.username || null, user.name || null, user.phone || null, "owner", ts);
       return json(res, 200, tripPayload(stmt.trip.get(id), { role: "owner" }));
     }
     return json(res, 405, { error: "method not allowed" });
@@ -609,7 +782,7 @@ async function api(req, res, url, user) {
       });
     }
     if (m === "POST") {
-      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, user.name || null, "member", now());
+      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, user.name || null, user.phone || null, "member", now());
       return json(res, 200, { tripId: trip.id, joined: !already });
     }
     return json(res, 405, { error: "method not allowed" });
@@ -679,7 +852,7 @@ async function api(req, res, url, user) {
         if (!role) return json(res, 400, { error: "bad role" });
         const target = stmt.member.get(tripId, tail[1]);
         if (!target) return json(res, 404, { error: "no such member" });
-        stmt.addMember.run(tripId, target.user_id, target.username, target.name || null, role, target.joined_at);
+        stmt.addMember.run(tripId, target.user_id, target.username, target.name || null, target.phone || null, role, target.joined_at);
         return json(res, 200, { ok: true });
       }
       return json(res, 405, { error: "method not allowed" });
@@ -702,20 +875,38 @@ async function api(req, res, url, user) {
       if (m === "POST") {
         const body = await readJson(req);
         const id = uid(), ts = now();
-        const f = placeFields(body, ctx.trip.currency);
+        const f = placeFields(body, ctx.trip.currency, tripId);
         stmt.insertPlace.run(
           id, tripId, f.title || "Новое место", f.kind || "spot", f.note ?? null, f.address ?? null,
           f.map_url ?? null, f.lat ?? null, f.lon ?? null, f.link_url ?? null,
           f.day ?? null, f.time_from ?? null, f.time_to ?? null,
           f.cost_amount ?? null, f.cost_currency ?? null, f.cost_per ?? "total",
+          f.paid_by ?? null, f.split ?? "equal",
           0, null, null,
           stmt.maxOrder.get(tripId).m + 1,
           user.id, ts, ts,
         );
+        writeShares(id, tripId, body.shares);
         stmt.touchTrip.run(ts, tripId);
         return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
       }
       return json(res, 405, { error: "method not allowed" });
+    }
+
+    // переводы между участниками
+    if (tail[0] === "settlements" && m === "POST") {
+      const body = await readJson(req);
+      const toUser = str(body.toUser, 64);
+      const amount = num(body.amount);
+      if (!toUser || !stmt.member.get(tripId, toUser)) return json(res, 400, { error: "no such member" });
+      if (toUser === user.id) return json(res, 400, { error: "self", message: "Перевод самому себе ничего не меняет." });
+      if (amount === null || amount <= 0) return json(res, 400, { error: "bad amount" });
+      // Запись создаёт только отправитель и только от своего имени: это
+      // заявление «я перевёл», а не бухгалтерская проводка за другого.
+      stmt.addSettlement.run(uid(), tripId, user.id, toUser, Math.round(amount * 100) / 100,
+        str(body.note, 200), now(), null);
+      stmt.touchTrip.run(now(), tripId);
+      return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
     }
 
     // фото поездки целиком (без привязки к месту) — тем же обработчиком, что и у места
@@ -737,7 +928,7 @@ async function api(req, res, url, user) {
     if (!tail.length) {
       if (m === "PATCH") {
         const body = await readJson(req);
-        const f = placeFields(body, ctx.trip.currency);
+        const f = placeFields(body, ctx.trip.currency, ctx.trip.id);
         if ("done" in body) {
           f.done = body.done ? 1 : 0;
           f.done_by = body.done ? user.id : null;
@@ -745,6 +936,7 @@ async function api(req, res, url, user) {
         }
         f.updated_at = now();
         updateRow("places", place.id, f);
+        writeShares(place.id, ctx.trip.id, body.shares);
         stmt.touchTrip.run(f.updated_at, ctx.trip.id);
         return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
       }
@@ -761,7 +953,87 @@ async function api(req, res, url, user) {
     if (tail[0] === "photos" && m === "POST") {
       return await uploadPhoto(req, res, ctx, user, place.id, url);
     }
+    // Позиции чека приходят пачкой: разбирают вставленный текст на фронте, а
+    // сюда отправляют уже разобранный список — по одной штуке это была бы
+    // очередь из двадцати запросов.
+    if (tail[0] === "items" && m === "POST") {
+      const body = await readJson(req, 512 * 1024);
+      const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+      let order = stmt.maxItemOrder.get(place.id).m;
+      const ts = now();
+      for (const raw of items) {
+        const title = str(raw?.title, 200);
+        const amount = num(raw?.amount);
+        if (!title || amount === null) continue;
+        const id = uid();
+        stmt.addItem.run(id, place.id, title, Math.max(0, round2(amount)), num(raw?.qty), ++order, ts);
+        writeItemUsers(id, ctx.trip.id, raw?.users);
+      }
+      syncCostFromItems(place.id);
+      stmt.touchTrip.run(ts, ctx.trip.id);
+      return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
+    }
     return json(res, 404, { error: "not found" });
+  }
+
+  // ── позиция чека ────────────────────────────────────────────
+  if (seg[1] === "items" && seg[2]) {
+    const item = stmt.item.get(seg[2]);
+    if (!item) return json(res, 404, { error: "not found" });
+    const place = stmt.place.get(item.place_id);
+    const ctx = place && access(place.trip_id, user);
+    if (!ctx) return json(res, 404, { error: "not found" });
+
+    if (seg[3] === "take" && m === "POST") {
+      // Отметить «это моё» может каждый и только за себя: чужую тарелку
+      // приписывать некому.
+      const mine = stmt.itemUsers.all(item.id).some(u => u.user_id === user.id);
+      if (mine) stmt.dropItemUser.run(item.id, user.id);
+      else stmt.addItemUser.run(item.id, user.id);
+      stmt.touchTrip.run(now(), ctx.trip.id);
+      return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
+    }
+    if (!seg[3] && m === "PATCH") {
+      const body = await readJson(req);
+      const title = "title" in body ? (str(body.title, 200) || item.title) : item.title;
+      const amount = "amount" in body ? Math.max(0, round2(num(body.amount) ?? item.amount)) : item.amount;
+      stmt.updateItem.run(title, amount, item.id);
+      if ("users" in body) writeItemUsers(item.id, ctx.trip.id, body.users);
+      syncCostFromItems(place.id);
+      stmt.touchTrip.run(now(), ctx.trip.id);
+      return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
+    }
+    if (!seg[3] && m === "DELETE") {
+      stmt.dropItem.run(item.id);
+      syncCostFromItems(place.id);
+      stmt.touchTrip.run(now(), ctx.trip.id);
+      return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
+    }
+    return json(res, 405, { error: "method not allowed" });
+  }
+
+  // ── перевод: подтверждение и отмена ─────────────────────────
+  if (seg[1] === "settlements" && seg[2]) {
+    const s = stmt.settlement.get(seg[2]);
+    if (!s) return json(res, 404, { error: "not found" });
+    const ctx = access(s.trip_id, user);
+    if (!ctx) return json(res, 404, { error: "not found" });
+
+    if (seg[3] === "confirm" && m === "POST") {
+      // Подтверждает только получатель: «деньги пришли» — единственное, что он
+      // знает достоверно, и единственное, чего не знает сервис.
+      if (s.to_user !== user.id) return json(res, 403, { error: "not yours", message: "Подтвердить получение может только получатель." });
+      stmt.confirmSettlement.run(now(), s.id);
+      return json(res, 200, tripPayload(stmt.trip.get(s.trip_id), ctx.member));
+    }
+    if (!seg[3] && m === "DELETE") {
+      // Удалить может любая из двух сторон: отправитель — если ошибся, получатель —
+      // если денег так и не увидел.
+      if (s.from_user !== user.id && s.to_user !== user.id) return json(res, 403, { error: "not yours" });
+      stmt.dropSettlement.run(s.id);
+      return json(res, 200, tripPayload(stmt.trip.get(s.trip_id), ctx.member));
+    }
+    return json(res, 405, { error: "method not allowed" });
   }
 
   // ── фото ────────────────────────────────────────────────────
