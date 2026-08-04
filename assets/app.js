@@ -163,6 +163,7 @@ const ROUTE_KEY = "trip.route";   // куда вернуть человека п
 async function init() {
   const cfg = await (await fetch("/api/config")).json();
   state.maxPhotoBytes = cfg.maxPhotoBytes || state.maxPhotoBytes;
+  state.scanReceipt = !!cfg.scanReceipt;
   auth = createAuthClient({
     authBase: cfg.authBase,
     clientId: cfg.clientId,
@@ -539,7 +540,7 @@ function renderDebts() {
 
   const noPayer = places.filter(p => !p.paidBy && p.costAmount != null).length;
   $("debtHint").textContent = noPayer
-    ? `У ${noPayer} ${plural(noPayer, "места", "мест", "мест")} с ценой не указано, кто платил — они в расчёт не вошли.`
+    ? `У ${noPayer} ${plural(noPayer, "места", "мест", "мест")} с ценой не указано, кто платил(-а) — они в расчёт не вошли.`
     : "Статус перевода в банке сервису недоступен: «Я перевёл» и «Получил» отмечаете вы сами.";
 }
 
@@ -589,7 +590,9 @@ function openPayDialog(member, amount) {
     }));
   } else {
     box.append(Object.assign(el("div", "pay-empty"), {
-      innerHTML: `<b>${esc(who(member))}</b> не поделился номером телефона.<br>` +
+      // Безлично: род по имени не угадать, а «поделился(-ась)» в предложении
+      // читается тяжелее, чем простая констатация.
+      innerHTML: `У <b>${esc(who(member))}</b> номер телефона не указан или закрыт для сервисов.<br>` +
         `Номер указывается один раз в аккаунте BurningHouse — там же есть отдельная галочка «показывать сервисам». ` +
         `Попросите включить её, либо спросите реквизиты напрямую и отметьте перевод здесь.`,
     }));
@@ -711,7 +714,7 @@ function placeCard(p, siblings) {
     const payer = state.trip.members.find(m => m.userId === p.paidBy);
     if (payer) {
       line.push(`<span class="bit">${svg('<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/>', "icon xs")}` +
-        `платил${payer.userId === state.me?.id ? "и вы" : ": " + esc(who(payer))}` +
+        `платил${payer.userId === state.me?.id ? "и вы" : "(-а): " + esc(who(payer))}` +
         `${p.split === "custom" ? ", по-разному" : ""}</span>`);
     }
   }
@@ -973,13 +976,21 @@ function openPlaceDialog(place, presetDay) {
   $("pdDay").value = place?.day ?? (presetDay !== undefined ? presetDay : defaultDay());
   $("pdFrom").value = place?.timeFrom || "";
   $("pdTo").value = place?.timeTo || "";
-  $("pdCost").value = place?.costAmount != null ? String(place.costAmount) : "";
-  $("pdCostPer").value = place?.costPer || "total";
+  // Сумму всегда показываем целиком. У мест, заведённых до отказа от «цены с
+  // человека», в базе лежит цена на одного — приводим её к общей сумме, чтобы
+  // в поле не оказалось число, означающее не то, что написано на подписи.
+  // Итог при этом не меняется: он и раньше считался умножением на состав.
+  const heads = Math.max((state.trip?.members || []).length, 1);
+  const shown = place?.costAmount == null ? null
+    : (place.costPer === "person" ? round2(place.costAmount * heads) : place.costAmount);
+  $("pdCost").value = shown == null ? "" : String(shown);
   $("pdMap").value = place?.mapUrl || "";
   $("pdAddress").value = place?.address || "";
   $("pdLink").value = place?.linkUrl || "";
   $("pdNote").value = place?.note || "";
   $("placeDeleteBtn").hidden = !place;
+  // Свёрнутое, но заполненное поле никто не найдёт — раскрываем блок сам.
+  $("pdMore").open = !!(place?.address || place?.linkUrl || place?.note);
 
   // Счёт. Плательщик по умолчанию — тот, кто заводит место: чаще всего платит
   // он, а исправить одним щелчком дешевле, чем выбирать каждый раз.
@@ -1047,14 +1058,15 @@ function renderBill() {
   box.textContent = "";
   const foot = $("pdSharesFoot");
   $("pdItemsBlock").hidden = pdSplitMode !== "items";
+  // Цена и «за всё / с человека» при делении по позициям только путают: сумму
+  // считают сами позиции, и два источника одной цифры разошлись бы.
+  $("pdPriceRow").hidden = pdSplitMode === "items";
 
   if (pdSplitMode === "items") {
     box.hidden = true;
     foot.hidden = true;
-    renderItems();
-    $("pdBillHint").textContent = editingPlace
-      ? "Цена места считается по позициям. Чаевые и обслуживание заводите такой же строкой."
-      : "";
+    renderItemsSummary();
+    $("pdBillHint").textContent = "Чаевые и обслуживание заводятся такой же строкой.";
     return;
   }
 
@@ -1062,7 +1074,7 @@ function renderBill() {
     box.hidden = true;
     foot.hidden = true;
     $("pdBillHint").textContent = !total
-      ? "Впишите цену выше — или выберите «По позициям» и сфотографируйте чек, тогда цена соберётся сама."
+      ? "Впишите сумму счёта — или выберите «По позициям» и добавьте чек, тогда она соберётся сама."
       : members.length > 1
         ? `Поровну между всеми: по ${money(round2(total / members.length), billCurrency())} с человека. Новый попутчик попадёт в этот счёт автоматически.`
         : "Пока вы в поездке один — счёт целиком ваш.";
@@ -1120,16 +1132,19 @@ $("pdReceiptBtn").onclick = async () => {
   $("rcText").value = "";
   $("rcList").textContent = "";
   $("rcStatus").textContent = "";
+  $("rcWarn").hidden = true;
   $("rcProgress").hidden = true;
   parsedItems = [];
   $("rcAddBtn").disabled = true;
-  // Распознавание тянет ~6,6 МБ движка и модели, поэтому кнопку прячем там,
-  // где оно всё равно не заработает, а не показываем и падаем на нажатии.
-  $("rcPhotoBtn").hidden = !ocrSupported();
+  // Кнопку съёмки показываем, только если распознавание настроено на сервере.
+  $("rcPhotoBlock").hidden = !state.scanReceipt;
+  $("rcDesc").textContent = state.scanReceipt
+    ? "Сфотографируйте чек — разберём позиции сами. Или вставьте текстом, если чек электронный."
+    : "Вставьте чек текстом — из электронного чека, из приложения банка или ресторана.";
   openScrim("receiptScrim");
 };
 
-// ── распознавание фотографии ──
+// ── распознавание по фотографии (разбирает сервер) ──
 $("rcPhotoBtn").onclick = () => $("rcPhotoInput").click();
 $("rcPhotoInput").addEventListener("change", async e => {
   const file = e.target.files[0];
@@ -1137,31 +1152,64 @@ $("rcPhotoInput").addEventListener("change", async e => {
   if (!file) return;
 
   const bar = $("rcProgress");
-  const fill = bar.firstElementChild;
   bar.hidden = false;
-  fill.style.width = "2%";
+  bar.firstElementChild.style.width = "35%";
   $("rcPhotoBtn").disabled = true;
-  $("rcStatus").textContent = "Готовим снимок…";
+  $("rcWarn").hidden = true;
+  $("rcStatus").textContent = "Читаем чек — это занимает несколько секунд…";
 
   try {
-    const text = await ocrReceipt(file, p => {
-      fill.style.width = Math.round(p * 100) + "%";
-      if (p > 0.12) $("rcStatus").textContent = "Читаем чек… " + Math.round(p * 100) + "%";
+    // Снимок жмём тем же кодом, что и фотографии мест: мегабайты по мобильному
+    // интернету ради распознавания гонять незачем, а качества хватает.
+    const blob = await shrink(file, 1800, 0.85);
+    bar.firstElementChild.style.width = "70%";
+    const res = await api(`/places/${editingPlace.id}/scan`, {
+      method: "POST", raw: true, body: blob,
+      headers: { "Content-Type": blob.type || "image/jpeg" },
     });
-    $("rcText").value = text.trim();
-    // Сразу разбираем: человек фотографировал не ради текста, а ради позиций.
-    $("rcParseBtn").click();
-    if (!parsedItems.length) {
-      $("rcStatus").textContent = "Прочитать не получилось. Поправьте текст выше или впишите позиции руками — снимок при хорошем свете и без наклона читается заметно лучше.";
-    }
+    bar.firstElementChild.style.width = "100%";
+
+    parsedItems = res.items.map(i => ({ title: i.title, amount: i.amount, qty: i.qty, guest: i.guest, suspect: i.suspect }));
+    renderParsed();
+    $("rcAddBtn").disabled = !parsedItems.length;
+    $("rcStatus").textContent = `Нашлось позиций: ${parsedItems.length}.`;
+    showScanWarning(res);
   } catch (err) {
-    console.error(err);
-    $("rcStatus").textContent = err.message || "Не удалось распознать чек";
+    $("rcStatus").textContent = (err && err.message) || "Не удалось разобрать чек";
   } finally {
     bar.hidden = true;
     $("rcPhotoBtn").disabled = false;
   }
 });
+
+/**
+ * Честный итог сверки. Модель ошибается не мелочью, а теряет строку целиком —
+ * и это видно по расхождению с итогом чека. Молча принять такой разбор значит
+ * разделить между людьми не ту сумму.
+ */
+function showScanWarning(res) {
+  const box = $("rcWarn");
+  const cur = billCurrency();
+  if (res.matches) {
+    box.className = "rc-warn ok";
+    box.textContent = `Сумма позиций сходится с итогом чека: ${money(res.total, cur)}.`;
+    box.hidden = false;
+    return;
+  }
+  const lines = [];
+  if (res.total == null) {
+    lines.push(`Итог чека не разобрался, сверить не с чем. Сумма позиций — ${money(res.sum, cur)}; сравните её с чеком сами.`);
+  } else {
+    lines.push(`Не сходится: позиций на ${money(res.sum, cur)}, а в чеке ${money(res.total, cur)}. ` +
+      `Разница ${money(Math.abs(res.diff), cur)} — скорее всего, потеряна или неверно прочитана строка.`);
+  }
+  for (const w of res.warnings || []) {
+    if (w.kind === "line") lines.push(`«${w.title}»: количество × цена даёт ${money(w.expected, cur)}, а в сумме строки ${money(w.got, cur)}.`);
+  }
+  box.className = "rc-warn bad";
+  box.textContent = lines.join(" ");
+  box.hidden = false;
+}
 
 $("rcParseBtn").onclick = () => {
   const { items, skipped } = parseReceipt($("rcText").value);
@@ -1176,11 +1224,19 @@ $("rcParseBtn").onclick = () => {
 function renderParsed() {
   const box = $("rcList");
   box.textContent = "";
+  let lastGuest;
   parsedItems.forEach((it, i) => {
-    const row = el("div", "rc-row");
+    // Чек, разбитый по гостям, сохраняем таким же: это готовый ответ на «кто
+    // что заказывал», и одним нажатием он превращается в доли.
+    if (it.guest && it.guest !== lastGuest) {
+      lastGuest = it.guest;
+      box.append(Object.assign(el("div", "rc-guest"), { textContent: guestLabel(it.guest) }));
+    }
+    const row = el("div", "rc-row" + (it.suspect ? " suspect" : ""));
     const title = el("input");
     title.type = "text";
     title.value = it.title;
+    title.title = it.suspect ? "Количество и цена не сходятся с суммой строки — проверьте" : "";
     title.oninput = () => { it.title = title.value; };
     const amount = el("input", "amt");
     amount.type = "text";
@@ -1198,7 +1254,8 @@ function renderParsed() {
 
 $("rcAddBtn").onclick = async () => {
   if (!editingPlace) return snack("Сначала сохраните место");
-  const data = await act(() => api(`/places/${editingPlace.id}/items`, { method: "POST", body: { items: parsedItems } }),
+  const body = { items: parsedItems.map(i => ({ title: i.title, amount: i.amount, qty: i.qty, guest: i.guest || null })) };
+  const data = await act(() => api(`/places/${editingPlace.id}/items`, { method: "POST", body }),
     `Добавлено позиций: ${parsedItems.length}`);
   if (!data) return;
   closeScrim("receiptScrim");
@@ -1222,12 +1279,41 @@ function applyTripData(data) {
     // сохранении места пустое поле затёрло бы сумму чека.
     if (editingPlace.split === "items") {
       $("pdCost").value = editingPlace.costAmount != null ? String(editingPlace.costAmount) : "";
-      $("pdCostPer").value = "total";
+      // Появились позиции — значит счёт делится по ним. Оставлять диалог в
+      // режиме «поровну» значило бы спрятать только что разобранный чек.
+      pdSplitMode = "items";
     }
   }
   renderTrip();
   renderBill();
+  // Окно позиций открыто — перерисовываем и его: иначе после отметки «моё»
+  // список остался бы прежним, а сумма внизу уже другой.
+  if ($("itemsScrim").classList.contains("open")) renderItems();
 }
+
+/** Итог по позициям в блоке «Счёт»: сколько их, на сколько и сколько лично на меня. */
+function renderItemsSummary() {
+  const items = editingPlace?.items || [];
+  const cur = billCurrency();
+  const box = $("pdItemsSummary");
+  if (!items.length) {
+    box.textContent = "Позиций пока нет — заполните по чеку или добавьте вручную.";
+    box.className = "items-summary empty";
+    return;
+  }
+  const total = round2(items.reduce((s, i) => s + i.amount, 0));
+  const mine = round2(itemsShareOf(editingPlace, state.me?.id, state.trip.members));
+  box.className = "items-summary";
+  box.innerHTML = `<b>${items.length} ${plural(items.length, "позиция", "позиции", "позиций")}</b> на ${esc(money(total, cur))}` +
+    `<span class="mine">ваша доля ${esc(money(mine, cur))}</span>`;
+}
+
+/** Открыть окно позиций. Место должно существовать — позиции цепляются к нему. */
+$("pdOpenItemsBtn").onclick = async () => {
+  if (!await ensurePlaceSaved()) return;
+  renderItems();
+  openScrim("itemsScrim");
+};
 
 function renderItems() {
   const box = $("pdItems");
@@ -1235,7 +1321,21 @@ function renderItems() {
   const items = editingPlace?.items || [];
   const members = state.trip.members;
 
+  let lastGuest;
   for (const it of items) {
+    // Блок гостя из чека — это готовая группа: назначить её человеку одним
+    // нажатием быстрее, чем отмечать пять строк по одной.
+    if (it.guest && it.guest !== lastGuest) {
+      lastGuest = it.guest;
+      const head = el("div", "items-guest");
+      head.append(el("span", null, guestLabel(it.guest)));
+      const assign = el("button", "btn text");
+      assign.type = "button";
+      assign.textContent = "Это чьё-то";
+      assign.onclick = () => assignGuest(it.guest);
+      head.append(assign);
+      box.append(head);
+    }
     const row = el("div", "item-row");
     const mine = it.users.includes(state.me?.id);
 
@@ -1291,7 +1391,9 @@ function renderItems() {
 
   if (!items.length) {
     box.append(Object.assign(el("div", "hint"), {
-      textContent: "Позиций пока нет. Сфотографируйте чек — распознаем и разложим по строкам, — или добавьте вручную.",
+      textContent: state.scanReceipt
+        ? "Позиций пока нет. Сфотографируйте чек — разберём и разложим по строкам, — или добавьте вручную."
+        : "Позиций пока нет. Вставьте чек текстом или добавьте вручную.",
     }));
   }
 
@@ -1302,6 +1404,49 @@ function renderItems() {
     try { await navigator.clipboard.writeText(String(mineSum)); snack("Сумма скопирована"); }
     catch { snack("Скопируйте сумму вручную"); }
   };
+}
+
+/** Модель возвращает метку блока то как «Гость 2», то просто «2». */
+const guestLabel = g => (/^\d+$/.test(String(g).trim()) ? `Гость ${g}` : String(g));
+
+/** Назначить весь блок гостя одному человеку — типичный случай общего счёта. */
+function assignGuest(guest) {
+  const members = state.trip.members;
+  const items = (editingPlace?.items || []).filter(i => i.guest === guest);
+  $("cfTitle").textContent = guestLabel(guest);
+  const box = $("cfText");
+  box.textContent = "";
+  box.append(Object.assign(el("p", "hint"), {
+    textContent: `${items.length} ${plural(items.length, "позиция", "позиции", "позиций")} на ${money(round2(items.reduce((s, i) => s + i.amount, 0)), billCurrency())}. Чьи они?`,
+  }));
+  const list = el("div", "shares");
+  let chosen = null;
+  for (const m of members) {
+    const row = el("div", "share-row");
+    const pick = el("button", "btn text");
+    pick.type = "button";
+    pick.textContent = who(m) + (m.userId === state.me?.id ? " (вы)" : "");
+    pick.onclick = () => {
+      chosen = m.userId;
+      list.querySelectorAll(".btn").forEach(b => b.classList.toggle("tonal", b === pick));
+    };
+    row.append(pick);
+    list.append(row);
+  }
+  box.append(list);
+  $("cfOk").textContent = "Назначить";
+  $("cfOk").onclick = async () => {
+    if (!chosen) return snack("Выберите человека");
+    closeScrim("confirmScrim");
+    let data = null;
+    for (const it of items) {
+      data = await act(() => api("/items/" + it.id, { method: "PATCH", body: { users: [chosen] } }));
+      if (!data) return;
+    }
+    applyTripData(data);
+    snack("Позиции назначены");
+  };
+  openScrim("confirmScrim");
 }
 
 /** Простой выбор, кто делит позицию: список участников с галочками. */
@@ -1347,10 +1492,9 @@ function itemsShareOf(place, userId, members) {
   return sum;
 }
 
+/** Сумма счёта — то, что введено. Делит его переключатель ниже, а не поле. */
 function billTotal() {
-  const heads = Math.max((state.trip?.members || []).length, 1);
-  const amount = parseAmount($("pdCost").value);
-  return $("pdCostPer").value === "person" ? round2(amount * heads) : round2(amount);
+  return round2(parseAmount($("pdCost").value));
 }
 const billCurrency = () => state.trip?.trip?.currency || "RUB";
 
@@ -1396,12 +1540,6 @@ $("pdSplit").addEventListener("click", e => {
   const was = pdSplitMode;
   pdSplitMode = b.dataset.split;
   if (pdSplitMode !== "equal" && pdSplitMode !== "items") {
-    // Со своими суммами «цена с человека» теряет смысл: сумма счёта берётся
-    // как есть, а кто сколько должен — уже в долях ниже.
-    if ($("pdCostPer").value === "person") {
-      $("pdCost").value = String(billTotal());
-      $("pdCostPer").value = "total";
-    }
     if (!pdShares.size) for (const m of state.trip.members) pdShares.set(m.userId, 0);
     // «На выбранных» — это именно поровну между отмеченными, поэтому при входе
     // в режим суммы пересчитываются. «Свои суммы» ничего не трогают: там как
@@ -1412,7 +1550,6 @@ $("pdSplit").addEventListener("click", e => {
 });
 $("pdSpreadBtn").onclick = () => { spreadEqually(); renderBill(); };
 $("pdCost").addEventListener("input", renderBill);
-$("pdCostPer").addEventListener("change", renderBill);
 
 /** Новое место по умолчанию попадает в первый день поездки — чаще всего
     планируют подряд, и переставить дату дешевле, чем вводить её каждый раз. */
@@ -1476,7 +1613,8 @@ function placeBody() {
     timeFrom: $("pdFrom").value || null,
     timeTo: $("pdTo").value || null,
     costAmount: $("pdCost").value.trim() ? Number($("pdCost").value.replace(",", ".").replace(/\s/g, "")) : null,
-    costPer: $("pdCostPer").value,
+    // Введённое всегда считаем суммой счёта: делит его переключатель ниже.
+    costPer: "total",
     mapUrl: $("pdMap").value.trim() || null,
     lat: pdGeoPoint?.lat ?? null,
     lon: pdGeoPoint?.lon ?? null,

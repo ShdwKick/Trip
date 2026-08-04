@@ -11,3 +11,7 @@ test/.work/
 *.log
 .DS_Store
 Thumbs.db
+
+# Фотографии чеков для ручной проверки распознавания — в репозиторий не нужны
+test/fixtures/
+assets/__fx/

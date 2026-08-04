@@ -417,6 +417,24 @@ a{color:var(--md-sys-color-primary)}
 .field input::-webkit-calendar-picker-indicator{filter:invert(var(--pick,0))}
 [data-theme="dark"]{--pick:1}
 
+/* Свёрнутые редкие поля. Заголовок — не «ещё одна кнопка», а спокойная строка:
+   он открывается раз в десять заполнений и не должен спорить с полями. */
+.more{margin-top:18px;border-top:1px solid var(--md-sys-color-outline-variant);padding-top:6px}
+.more>summary{
+  list-style:none;cursor:pointer;padding:8px 2px;user-select:none;
+  font-size:13px;font-weight:600;color:var(--md-sys-color-on-surface-variant);
+  display:flex;align-items:center;gap:8px;
+}
+.more>summary::-webkit-details-marker{display:none}
+.more>summary::before{
+  content:"";width:8px;height:8px;flex:none;
+  border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(-45deg);transition:transform .18s var(--ease-std);
+}
+.more[open]>summary::before{transform:rotate(45deg)}
+.more>summary:hover{color:var(--md-sys-color-on-surface)}
+.more>summary:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px;border-radius:6px}
+
 .kind-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
 .kind{
   display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px;cursor:pointer;
@@ -477,7 +495,13 @@ a{color:var(--md-sys-color-primary)}
 
 /* ===================== ПОЗИЦИИ ЧЕКА ===================== */
 .items-block{margin-top:14px}
-.items{display:grid;gap:6px}
+.items-summary{
+  display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px;
+  font-size:14px;color:var(--md-sys-color-on-surface);
+}
+.items-summary .mine{margin-left:auto;font-weight:650}
+.items-summary.empty{font-size:13px;color:var(--md-sys-color-on-surface-variant)}
+.items{display:grid;gap:6px;max-height:46vh;overflow:auto;padding-right:2px}
 .item-row{display:flex;align-items:center;gap:8px}
 .item-row .nm{
   flex:1;min-width:0;font:inherit;font-size:14px;padding:8px 10px;
@@ -505,7 +529,18 @@ a{color:var(--md-sys-color-primary)}
 
 .rc-photo{margin-top:16px}
 .rc-progress{height:6px;border-radius:99px;background:var(--md-sys-color-surface-container-high);overflow:hidden;margin-top:12px}
-.rc-progress>i{display:block;height:100%;width:0;border-radius:99px;background:var(--md-sys-color-primary);transition:width .25s var(--ease-std)}
+.rc-progress>i{display:block;height:100%;width:0;border-radius:99px;background:var(--md-sys-color-primary);transition:width .4s var(--ease-std)}
+.rc-warn{margin-top:12px;padding:11px 13px;border-radius:var(--md-sys-shape-corner-m);font-size:13px;line-height:1.5}
+.rc-warn.ok{background:var(--md-ok-container);color:var(--md-ok)}
+.rc-warn.bad{background:var(--md-warn-container);color:var(--md-warn)}
+.rc-guest,.items-guest{
+  display:flex;align-items:center;gap:10px;margin-top:10px;
+  font-size:12px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;
+  color:var(--md-sys-color-on-surface-variant);
+}
+.items-guest .btn{margin-left:auto;height:28px;padding:0 10px;font-size:12px;text-transform:none;letter-spacing:0}
+.rc-row.suspect input{border-color:var(--md-warn);background:var(--md-warn-container)}
+
 .rc-actions{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
 .rc-actions .hint{margin-top:0}
 .rc-list{margin-top:14px;display:grid;gap:6px;max-height:38vh;overflow:auto}

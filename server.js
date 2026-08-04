@@ -48,6 +48,12 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
 const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(4 * 1024 * 1024), 10);
 const RESOLVE_SHORT_LINKS = process.env.RESOLVE_SHORT_LINKS !== "0";
 
+// Распознавание чека. Без ключа сервис работает как раньше — просто без кнопки
+// съёмки: ключ есть не у всех, кто поднимет этот код у себя.
+const GIGACHAT_AUTH_KEY = process.env.GIGACHAT_AUTH_KEY || "";
+const GIGACHAT_SCOPE = process.env.GIGACHAT_SCOPE || "GIGACHAT_API_PERS";
+const GIGACHAT_MODEL = process.env.GIGACHAT_MODEL || "GigaChat-2-Pro";
+
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "trip";
 const AUTH_BASE = (process.env.AUTH_BASE || AUTH_ISSUER).replace(/\/+$/, "");
@@ -194,6 +200,7 @@ for (const sql of [
   "ALTER TABLE trip_members ADD COLUMN phone TEXT",        // номер для перевода, если разрешён
   "ALTER TABLE places ADD COLUMN paid_by TEXT",            // кто заплатил по счёту
   "ALTER TABLE places ADD COLUMN split TEXT NOT NULL DEFAULT 'equal'",  // equal | custom
+  "ALTER TABLE place_items ADD COLUMN guest TEXT",         // «Гость 1» из чека, если он так разбит
 ]) {
   try { db.exec(sql); } catch { /* уже есть */ }
 }
@@ -250,7 +257,7 @@ const stmt = {
       JOIN place_items i ON i.id = u.item_id JOIN places p ON p.id = i.place_id WHERE p.trip_id = ?`),
   item:         db.prepare("SELECT * FROM place_items WHERE id = ?"),
   itemsOfPlace: db.prepare("SELECT * FROM place_items WHERE place_id = ? ORDER BY sort_order, created_at"),
-  addItem:      db.prepare("INSERT INTO place_items (id,place_id,title,amount,qty,sort_order,created_at) VALUES (?,?,?,?,?,?,?)"),
+  addItem:      db.prepare("INSERT INTO place_items (id,place_id,title,amount,qty,guest,sort_order,created_at) VALUES (?,?,?,?,?,?,?,?)"),
   updateItem:   db.prepare("UPDATE place_items SET title = ?, amount = ? WHERE id = ?"),
   dropItem:     db.prepare("DELETE FROM place_items WHERE id = ?"),
   maxItemOrder: db.prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM place_items WHERE place_id = ?"),
@@ -487,6 +494,13 @@ const auth = require("./auth-client")({
 });
 auth.warmup(); // прогреть кэш ключей, чтобы первый запрос не ждал сеть
 
+const giga = require("./gigachat")({
+  authKey: GIGACHAT_AUTH_KEY,
+  scope: GIGACHAT_SCOPE,
+  model: GIGACHAT_MODEL,
+});
+const { checkBill } = require("./gigachat");
+
 /** Участие пользователя в поездке. Единственная точка проверки доступа. */
 function access(tripId, user) {
   const trip = stmt.trip.get(tripId);
@@ -532,7 +546,7 @@ function tripPayload(trip, me) {
   for (const it of stmt.itemsOfTrip.all(trip.id)) {
     if (!itemsOf.has(it.place_id)) itemsOf.set(it.place_id, []);
     itemsOf.get(it.place_id).push({
-      id: it.id, title: it.title, amount: it.amount, qty: it.qty,
+      id: it.id, title: it.title, amount: it.amount, qty: it.qty, guest: it.guest,
       users: itemUsers.get(it.id) || [], sortOrder: it.sort_order,
     });
   }
@@ -703,7 +717,10 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/health") return json(res, 200, { ok: true });
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику и менялся
     // одной переменной окружения.
-    if (p === "/api/config") return json(res, 200, { authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID, maxPhotoBytes: MAX_PHOTO_BYTES });
+    if (p === "/api/config") return json(res, 200, {
+      authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID, maxPhotoBytes: MAX_PHOTO_BYTES,
+      scanReceipt: giga.enabled,   // без ключа кнопку съёмки не показываем вовсе
+    });
 
     if (p.startsWith("/api/")) {
       // Вся авторизация — вот эти две строки. Подпись проверяется локально,
@@ -953,6 +970,27 @@ async function api(req, res, url, user) {
     if (tail[0] === "photos" && m === "POST") {
       return await uploadPhoto(req, res, ctx, user, place.id, url);
     }
+    // Распознать чек по фотографии. Снимок не сохраняем: он нужен на время
+    // разбора, а хранить чужие счета с суммами незачем.
+    if (tail[0] === "scan" && m === "POST") {
+      if (!giga.enabled) return json(res, 503, { error: "not configured", message: "Распознавание чека не настроено." });
+      const buf = await readBody(req, MAX_PHOTO_BYTES);
+      const mime = sniffImage(buf);
+      if (!mime) return json(res, 415, { error: "not an image", message: "Это не похоже на фотографию." });
+      try {
+        const { bill, usage } = await giga.readReceipt(buf, mime);
+        const checked = checkBill(bill);
+        // Расход пишем в лог: сколько стоит распознавание одного чека, из
+        // тарифов не выведешь, а знать это нужно.
+        console.log(`Чек распознан: позиций ${checked.items.length}, сумма ${checked.sum}, итог ${checked.total ?? "—"}` +
+          `${checked.matches ? ", сходится" : `, расхождение ${checked.diff ?? "?"}`}` +
+          `${usage ? `, токенов ${usage.total_tokens ?? "?"}` : ""}`);
+        return json(res, 200, checked);
+      } catch (e) {
+        console.error("Распознавание чека не удалось:", e.message);
+        return json(res, 502, { error: "scan failed", message: "Не удалось разобрать чек. Попробуйте снимок получше или впишите позиции руками." });
+      }
+    }
     // Позиции чека приходят пачкой: разбирают вставленный текст на фронте, а
     // сюда отправляют уже разобранный список — по одной штуке это была бы
     // очередь из двадцати запросов.
@@ -966,7 +1004,7 @@ async function api(req, res, url, user) {
         const amount = num(raw?.amount);
         if (!title || amount === null) continue;
         const id = uid();
-        stmt.addItem.run(id, place.id, title, Math.max(0, round2(amount)), num(raw?.qty), ++order, ts);
+        stmt.addItem.run(id, place.id, title, Math.max(0, round2(amount)), num(raw?.qty), str(raw?.guest, 40), ++order, ts);
         writeItemUsers(id, ctx.trip.id, raw?.users);
       }
       syncCostFromItems(place.id);

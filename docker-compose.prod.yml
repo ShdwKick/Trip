@@ -18,6 +18,16 @@ services:
       # он подписан внутрь токенов и сверяется побайтово. Без него сервис не стартует.
       AUTH_ISSUER: https://auth.burninghouse.ru
       AUTH_CLIENT_ID: trip
+      # Распознавание чека по фото. Ключ берётся из файла .env рядом с этим
+      # compose (права 600) и НИКОГДА не попадает ни в репозиторий, ни в образ:
+      # образ публичный, а секрет внутри образа — секрет для всех.
+      GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
+      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      GIGACHAT_MODEL: ${GIGACHAT_MODEL:-GigaChat-2-Pro}
+      # Домены Сбера подписаны корневым сертификатом Минцифры, которого нет в
+      # alpine. Без него TLS не поднимется, а отключать проверку нельзя — по
+      # этой связи уходит фотография чека.
+      NODE_EXTRA_CA_CERTS: /app/certs/russian_trusted_root_ca.pem
       # Сервис должен быть зарегистрирован в auth как клиент:
       #   docker compose exec auth node server.js client-add trip "Куда поедем?" https://trip.burninghouse.ru/
       # Фронт и API на одном домене, CORS не нужен.
@@ -26,6 +36,9 @@ services:
       - "127.0.0.1:8790:8790"
     volumes:
       - trip-data:/app/data
+      # Сертификат кладут на сервер рядом с compose: он публичный, но в образ
+      # его не зашиваем — обновится у Минцифры, менять придётся файл, а не сборку.
+      - ./russian_trusted_root_ca.pem:/app/certs/russian_trusted_root_ca.pem:ro
 
 volumes:
   trip-data:
