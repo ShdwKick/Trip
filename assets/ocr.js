@@ -155,15 +155,84 @@
       logger: m => { if (m.status === "recognizing text") onProgress(0.15 + m.progress * 0.85); },
     });
     try {
-      // Чек — это столбец строк, а не абзац: разбивать его на колонки не нужно,
-      // иначе цены уезжают в отдельный блок и теряют связь с названиями.
-      await worker.setParameters({ tessedit_pageseg_mode: "4" });
-      const { data } = await worker.recognize(canvas);
+      // 6 — «один сплошной блок текста». Чек так и устроен, а вот режимы с
+      // разбором вёрстки видят в нём две колонки и разносят названия и суммы
+      // по разным блокам, разрывая строки.
+      await worker.setParameters({ tessedit_pageseg_mode: "6" });
+      // Просим координаты слов: без них не отличить колонку количества от
+      // разряда тысяч — см. columnsToText.
+      const { data } = await worker.recognize(canvas, {}, { blocks: true, text: true });
       onProgress(1);
-      return data.text || "";
+      return columnsToText(data) || data.text || "";
     } finally {
       await worker.terminate();
     }
+  }
+
+  /**
+   * Собирает строки из слов, помечая табуляцией широкие пробелы — границы
+   * колонок. Это единственный способ развести две одинаковые с виду строки:
+   *
+   *     Завтрак Папа может      1     790.00     → количество и сумма
+   *     Итого к оплате Гость 1:     1 280.00     → одно число с разрядами
+   *
+   * Расстояние между «1» и «790.00» в первой строке — ширина колонки, между
+   * «1» и «280.00» во второй — обычный пробел. По тексту это неразличимо, по
+   * координатам — очевидно.
+   */
+  function columnsToText(data) {
+    // Все слова разом, без деления на блоки. Собственная разметка Tesseract
+    // здесь мешает: колонку с названиями и колонку с суммами он считает
+    // разными блоками текста и выдаёт их подряд — сначала все названия, потом
+    // все числа. Строка чека при этом рассыпается, и связь «что сколько стоит»
+    // теряется ещё до разбора. Поэтому строки собираем сами, по координатам.
+    const words = [];
+    for (const block of data.blocks || []) {
+      for (const para of block.paragraphs || []) {
+        for (const line of para.lines || []) {
+          for (const w of line.words || []) {
+            if ((w.text || "").trim() && w.bbox) words.push(w);
+          }
+        }
+      }
+    }
+    if (!words.length) return "";
+
+    // Группируем в строки по вертикальному перекрытию: слова одной строки
+    // перекрываются по высоте, даже если Tesseract развёл их по разным блокам.
+    const heights = words.map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+    const lineHeight = heights[heights.length >> 1] || 12;
+    const rows = [];
+    for (const w of [...words].sort((a, b) => (a.bbox.y0 + a.bbox.y1) / 2 - (b.bbox.y0 + b.bbox.y1) / 2)) {
+      const mid = (w.bbox.y0 + w.bbox.y1) / 2;
+      const row = rows[rows.length - 1];
+      if (row && Math.abs(mid - row.mid) <= lineHeight * 0.6) {
+        row.words.push(w);
+        row.mid = (row.mid * (row.words.length - 1) + mid) / row.words.length;
+      } else {
+        rows.push({ mid, words: [w] });
+      }
+    }
+
+    return rows.map(row => {
+      const words = row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+      if (!words.length) return "";
+
+      // Ширину знака берём медианой по строке: средняя уезжает от одного
+      // длинного слова, а нам нужен масштаб «обычного пробела».
+      const widths = words.map(w => (w.bbox.x1 - w.bbox.x0) / Math.max(1, w.text.trim().length)).sort((a, b) => a - b);
+      const charWidth = widths[widths.length >> 1] || 8;
+
+      let out = words[0].text.trim();
+      for (let i = 1; i < words.length; i++) {
+        const gap = words[i].bbox.x0 - words[i - 1].bbox.x1;
+        // Порог подобран с запасом: обычный пробел — примерно один знак,
+        // колонка — заметно больше. Полтора знака разделяет их надёжно и не
+        // рвёт строку на словах, набранных вразрядку.
+        out += (gap > charWidth * 1.5 ? "\t" : " ") + words[i].text.trim();
+      }
+      return out;
+    }).join("\n");
   }
 
   root.ocrReceipt = ocrReceipt;
