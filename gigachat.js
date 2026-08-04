@@ -16,7 +16,6 @@
  */
 
 const crypto = require("crypto");
-const fs = require("fs");
 
 const OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const API_BASE = "https://gigachat.devices.sberbank.ru/api/v1";

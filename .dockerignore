@@ -5,3 +5,6 @@ data/
 node_modules/
 README.md
 deploy/
+test/
+.dev/
+dev.mjs
