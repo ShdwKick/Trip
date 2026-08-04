@@ -1023,11 +1023,10 @@ function myShare(p, heads) {
 function renderBill() {
   const members = state.trip?.members || [];
   const total = billTotal();
-  // Блок счёта нужен и при нулевой цене, если делим по позициям: цена как раз
-  // и появится, когда их заведут.
-  const show = total > 0 || pdSplitMode === "items" || (editingPlace?.items || []).length > 0;
-  $("pdBill").hidden = !show;
-  if (!show) return;
+  // Блок счёта показываем всегда. Раньше он появлялся только когда цена уже
+  // введена — и «по позициям» оказывалось не найти: чтобы разобрать чек, цену
+  // сначала надо откуда-то узнать, а узнают её как раз из чека.
+  $("pdBill").hidden = false;
 
   const sel = $("pdPaidBy");
   sel.textContent = "";
@@ -1062,9 +1061,11 @@ function renderBill() {
   if (pdSplitMode === "equal") {
     box.hidden = true;
     foot.hidden = true;
-    $("pdBillHint").textContent = members.length > 1
-      ? `Поровну между всеми: по ${money(round2(total / members.length), billCurrency())} с человека. Новый попутчик попадёт в этот счёт автоматически.`
-      : "Пока вы в поездке один — счёт целиком ваш.";
+    $("pdBillHint").textContent = !total
+      ? "Впишите цену выше — или выберите «По позициям» и сфотографируйте чек, тогда цена соберётся сама."
+      : members.length > 1
+        ? `Поровну между всеми: по ${money(round2(total / members.length), billCurrency())} с человека. Новый попутчик попадёт в этот счёт автоматически.`
+        : "Пока вы в поездке один — счёт целиком ваш.";
     return;
   }
 
@@ -1114,7 +1115,8 @@ function renderBill() {
 
 let parsedItems = [];
 
-$("pdReceiptBtn").onclick = () => {
+$("pdReceiptBtn").onclick = async () => {
+  if (!await ensurePlaceSaved()) return;
   $("rcText").value = "";
   $("rcList").textContent = "";
   $("rcStatus").textContent = "";
@@ -1204,7 +1206,7 @@ $("rcAddBtn").onclick = async () => {
 };
 
 $("pdAddItemBtn").onclick = async () => {
-  if (!editingPlace) return snack("Сначала сохраните место");
+  if (!await ensurePlaceSaved()) return;
   const data = await act(() => api(`/places/${editingPlace.id}/items`, {
     method: "POST", body: { items: [{ title: "Позиция", amount: 0 }] },
   }));
@@ -1289,9 +1291,7 @@ function renderItems() {
 
   if (!items.length) {
     box.append(Object.assign(el("div", "hint"), {
-      textContent: editingPlace
-        ? "Позиций пока нет. Вставьте чек текстом или добавьте вручную."
-        : "Сначала сохраните место — позиции добавляются к уже существующему счёту.",
+      textContent: "Позиций пока нет. Сфотографируйте чек — распознаем и разложим по строкам, — или добавьте вручную.",
     }));
   }
 
@@ -1467,8 +1467,9 @@ async function detectGeo(showResult) {
 $("pdMapBtn").onclick = () => detectGeo(true);
 $("pdMap").addEventListener("change", () => detectGeo(false));
 
-$("placeSaveBtn").onclick = async () => {
-  const body = {
+/** Что сейчас набрано в диалоге места. */
+function placeBody() {
+  return {
     title: $("pdTitle").value.trim() || "Новое место",
     kind: pdKind,
     day: $("pdDay").value || null,
@@ -1485,9 +1486,28 @@ $("placeSaveBtn").onclick = async () => {
     paidBy: pdPaidBy || null,
     // «На выбранных» — это те же свои суммы, просто заполненные поровну:
     // отдельного режима в базе нет, иначе пришлось бы хранить ещё и состав.
-    split: pdSplitMode === "equal" ? "equal" : "custom",
-    shares: pdSplitMode === "equal" ? [] : [...pdShares].map(([userId, amount]) => ({ userId, amount })),
+    split: pdSplitMode === "equal" ? "equal" : pdSplitMode === "items" ? "items" : "custom",
+    shares: ["equal", "items"].includes(pdSplitMode) ? [] : [...pdShares].map(([userId, amount]) => ({ userId, amount })),
   };
+}
+
+/**
+ * Позиции цепляются к уже существующему месту, а человек, который жмёт
+ * «Заполнить по чеку» на новом, про это знать не обязан. Поэтому место молча
+ * создаётся, и разбор чека продолжается как ни в чём не бывало.
+ */
+async function ensurePlaceSaved() {
+  if (editingPlace) return editingPlace;
+  const data = await act(() => api(`/trips/${state.trip.trip.id}/places`, { method: "POST", body: placeBody() }));
+  if (!data) return null;
+  state.trip = data;
+  editingPlace = data.places.slice().sort((a, b) => b.sortOrder - a.sortOrder)[0];
+  renderTrip();
+  return editingPlace;
+}
+
+$("placeSaveBtn").onclick = async () => {
+  const body = placeBody();
   if (body.costAmount != null && !Number.isFinite(body.costAmount)) return snack("Цена — это число");
 
   const tripId = state.trip.trip.id;
