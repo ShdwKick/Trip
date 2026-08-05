@@ -76,6 +76,18 @@ module.exports = function createGigaChat(options = {}) {
     const timer = setTimeout(() => ac.abort(), timeout);
     try {
       return await fetch(url, { ...init, signal: ac.signal });
+    } catch (e) {
+      // fetch прячет причину внутрь cause, и наружу выходит бесполезное
+      // «fetch failed». Разворачиваем: без этого «не работает» невозможно
+      // отличить недоверенный сертификат от отсутствия сети.
+      const cause = e?.cause;
+      const detail = [cause?.code, cause?.message].filter(Boolean).join(": ");
+      const hint = cause?.code === "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"
+          || cause?.code === "SELF_SIGNED_CERT_IN_CHAIN"
+          || /unable to (get|verify)/i.test(cause?.message || "")
+        ? " Похоже, не подключён корневой сертификат Минцифры — проверьте NODE_EXTRA_CA_CERTS."
+        : "";
+      throw new Error(`GigaChat: ${new URL(url).host} недоступен (${detail || e.message}).${hint}`);
     } finally {
       clearTimeout(timer);
     }
