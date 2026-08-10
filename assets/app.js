@@ -870,6 +870,12 @@ function openScrim(id) {
 function closeScrim(id) {
   $(id).classList.remove("open");
   if (!document.querySelector(".scrim.open")) document.body.classList.remove("scroll-lock");
+  // Мастер закрыли на последнем шаге — поездка уже создана, и списку надо о
+  // ней узнать. Иначе человек видит прежний список и думает, что не сохранилось.
+  if (id === "tripScrim" && createdTrip && !location.hash.startsWith("#/t/")) {
+    createdTrip = null;
+    showTrips().catch(console.error);
+  }
 }
 document.addEventListener("click", e => {
   const scrim = e.target.classList?.contains("scrim") ? e.target : null;
@@ -893,24 +899,99 @@ function confirmDialog(title, text, okLabel, onOk) {
 
 // ───────────────────────── диалог поездки ─────────────────────────
 let editingTrip = null;
+let tripStep = 1;        // шаг мастера: 1 — куда, 2 — когда, 3 — готово
+let createdTrip = null;  // поездка, созданная на втором шаге
 
+/**
+ * Создание идёт мастером, правка — обычной формой.
+ *
+ * Мастер здесь не ради красоты: поездку заводят один раз и обычно на бегу, а
+ * форма из шести полей заставляет решать всё сразу, включая описание, которое
+ * почти никому не нужно. Два коротких вопроса отвечаются не думая, а даты и
+ * вовсе можно пропустить. Правку, наоборот, открывают ради одного конкретного
+ * поля — прятать его за шагами было бы издевательством.
+ */
 function openTripDialog(trip) {
   editingTrip = trip || null;
-  $("tripDlgTitle").textContent = trip ? "Поездка" : "Новая поездка";
+  createdTrip = null;
+  tripStep = 1;
+
   $("tdTitle").value = trip?.title || "";
   $("tdDest").value = trip?.destination || "";
   $("tdFrom").value = trip?.startsOn || "";
   $("tdTo").value = trip?.endsOn || "";
   $("tdStatus").value = trip?.status || "planning";
   $("tdDesc").value = trip?.description || "";
-  $("tripDeleteBtn").hidden = !trip || trip.myRole !== "owner";
-  $("tripLeaveBtn").hidden = !trip;
+
+  renderTripDialog();
   openScrim("tripScrim");
-  setTimeout(() => $("tdTitle").focus(), 60);
+  setTimeout(() => $(trip ? "tdTitle" : "tdTitle").focus(), 60);
 }
 
-$("tripSaveBtn").onclick = async () => {
-  const body = {
+function renderTripDialog() {
+  const wizard = !editingTrip;
+  $("tdSteps").hidden = !wizard;
+  $("tdHint").hidden = !wizard;
+  $("tripBackBtn").hidden = !wizard || tripStep === 1 || tripStep === 3;
+  $("tripCancelBtn").hidden = wizard && tripStep === 3;
+  $("tripDeleteBtn").hidden = !editingTrip || editingTrip.myRole !== "owner";
+  $("tripLeaveBtn").hidden = !editingTrip;
+
+  if (wizard) {
+    $("tdSteps").querySelectorAll("i").forEach((dot, i) => {
+      dot.className = i + 1 === tripStep ? "on" : i + 1 < tripStep ? "done" : "";
+    });
+  }
+
+  // Что показываем на каждом шаге. При правке — всё сразу.
+  const show = {
+    tdWhat: !wizard || tripStep === 1,
+    tdWhen: !wizard || tripStep === 2,
+    tdExtra: !wizard,
+    tdDone: wizard && tripStep === 3,
+  };
+  for (const [id, on] of Object.entries(show)) $(id).hidden = !on;
+
+  if (!wizard) {
+    $("tripDlgTitle").textContent = "Поездка";
+    $("tripSaveBtn").textContent = "Сохранить";
+    return;
+  }
+  const steps = {
+    1: { title: "Куда едем?", hint: "Название — как вы называете эту поездку между собой. Остальное добавим потом.", button: "Дальше" },
+    2: { title: "Когда?", hint: "Даты можно не указывать — места разложатся по дням, когда они появятся.", button: "Создать" },
+    3: { title: "Готово", hint: "", button: "Открыть поездку" },
+  }[tripStep];
+  $("tripDlgTitle").textContent = steps.title;
+  $("tdHint").textContent = steps.hint;
+  $("tdHint").hidden = !steps.hint;
+  $("tripSaveBtn").textContent = steps.button;
+}
+
+$("tripBackBtn").onclick = () => { tripStep = Math.max(1, tripStep - 1); renderTripDialog(); };
+
+/** Быстрые даты: чаще всего это ближайшие выходные или неделя от сегодня. */
+$("tdQuick").addEventListener("click", e => {
+  const b = e.target.closest("button[data-dates]");
+  if (!b) return;
+  const iso = d => d.toISOString().slice(0, 10);
+  const today = new Date();
+  if (b.dataset.dates === "clear") { $("tdFrom").value = ""; $("tdTo").value = ""; return; }
+  if (b.dataset.dates === "week") {
+    $("tdFrom").value = iso(today);
+    $("tdTo").value = iso(new Date(today.getTime() + 6 * 86400000));
+    return;
+  }
+  // Ближайшая суббота; если сегодня суббота или воскресенье — эти же выходные.
+  const day = today.getDay();                 // 0 — воскресенье
+  const toSaturday = day === 6 ? 0 : day === 0 ? -1 : 6 - day;
+  const sat = new Date(today.getTime() + toSaturday * 86400000);
+  $("tdFrom").value = iso(sat);
+  $("tdTo").value = iso(new Date(sat.getTime() + 86400000));
+});
+
+function tripBody() {
+  return {
     title: $("tdTitle").value.trim() || "Новая поездка",
     destination: $("tdDest").value.trim(),
     startsOn: $("tdFrom").value || null,
@@ -920,20 +1001,52 @@ $("tripSaveBtn").onclick = async () => {
     status: $("tdStatus").value,
     description: $("tdDesc").value.trim(),
   };
-  if (body.startsOn && body.endsOn && body.endsOn < body.startsOn) return snack("Дата возвращения раньше даты отъезда");
+}
 
+$("tripSaveBtn").onclick = async () => {
+  // Правка: одна форма, одно сохранение.
   if (editingTrip) {
+    const body = tripBody();
+    if (body.startsOn && body.endsOn && body.endsOn < body.startsOn) return snack("Дата возвращения раньше даты отъезда");
     const data = await act(() => api("/trips/" + editingTrip.id, { method: "PATCH", body }), "Сохранено");
     if (!data) return;
     closeScrim("tripScrim");
     state.trip = data;
     renderTrip();
-  } else {
+    return;
+  }
+
+  if (tripStep === 1) {
+    if (!$("tdTitle").value.trim()) return snack("Как назовём поездку?");
+    tripStep = 2;
+    renderTripDialog();
+    return;
+  }
+
+  if (tripStep === 2) {
+    const body = tripBody();
+    if (body.startsOn && body.endsOn && body.endsOn < body.startsOn) return snack("Дата возвращения раньше даты отъезда");
     const data = await act(() => api("/trips", { method: "POST", body }), "Поездка создана");
     if (!data) return;
-    closeScrim("tripScrim");
-    location.hash = "#/t/" + data.trip.id;
+    createdTrip = data.trip;
+    tripStep = 3;
+    $("tdDoneText").textContent = `«${createdTrip.title}» создана. Позовите тех, кто едет с вами.`;
+    $("tdInviteUrl").value = createdTrip.joinCode ? inviteUrl(createdTrip.joinCode) : "";
+    renderTripDialog();
+    return;
   }
+
+  // Идентификатор забираем до закрытия: closeScrim гасит createdTrip, чтобы не
+  // дёргать список зря, и обращение к нему после было бы обращением к null.
+  const id = createdTrip.id;
+  createdTrip = null;
+  closeScrim("tripScrim");
+  location.hash = "#/t/" + id;
+};
+
+$("tdInviteCopy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("tdInviteUrl").value); snack("Ссылка скопирована"); }
+  catch { $("tdInviteUrl").select(); snack("Скопируйте ссылку вручную"); }
 };
 
 $("tripDeleteBtn").onclick = () => {

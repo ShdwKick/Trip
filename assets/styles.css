@@ -464,6 +464,37 @@ a{color:var(--md-sys-color-primary)}
 @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.97)}}
 .dlg-actions{display:flex;align-items:center;gap:8px;margin-top:22px;flex-wrap:wrap}
 
+/* ===================== МАСТЕР СОЗДАНИЯ ===================== */
+.steps{display:flex;gap:6px;margin-bottom:14px}
+.steps>i{
+  height:4px;flex:1;border-radius:99px;
+  background:var(--md-sys-color-surface-container-high);
+  transition:background .25s var(--ease-std);
+}
+.steps>i.on{background:var(--md-sys-color-primary)}
+.steps>i.done{background:color-mix(in srgb,var(--md-sys-color-primary) 45%,transparent)}
+/* Шаг появляется мягко: без этого смена содержимого читается как подмена окна. */
+.td-block:not([hidden]){animation:step .22s var(--ease-emph-dec) both}
+@keyframes step{from{opacity:0;transform:translateX(8px)}}
+
+.quick-dates{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip-btn{
+  height:32px;padding:0 13px;border-radius:var(--md-sys-shape-corner-full);cursor:pointer;
+  border:1px solid var(--md-sys-color-outline-variant);background:transparent;
+  color:var(--md-sys-color-on-surface-variant);font:inherit;font-size:12.5px;font-weight:600;
+  transition:background .18s,color .18s;
+}
+.chip-btn:hover{background:var(--md-sys-color-surface-container);color:var(--md-sys-color-on-surface)}
+
+.done-ic{
+  width:56px;height:56px;margin:4px auto 12px;border-radius:50%;display:grid;place-items:center;
+  background:var(--md-ok-container);color:var(--md-ok);
+}
+#tdDone{text-align:center}
+#tdDone .lead{margin-bottom:4px}
+#tdDone .share-link{text-align:left}
+#tdDone .hint{text-align:left}
+
 .share-link{display:flex;gap:8px;margin-top:16px}
 .share-link input{
   flex:1;min-width:0;font:inherit;font-size:13.5px;padding:11px 12px;

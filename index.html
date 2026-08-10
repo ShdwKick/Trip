@@ -181,30 +181,65 @@
 <!-- ===================== ДИАЛОГ ПОЕЗДКИ ===================== -->
 <div class="scrim" id="tripScrim">
   <div class="dialog">
+    <!-- Создание идёт шагами, правка — одной формой. Разделение намеренное:
+         мастер помогает, когда не знаешь, что спросят дальше; при правке он
+         только прячет поле, за которым человек пришёл. -->
+    <div class="steps" id="tdSteps" hidden><i></i><i></i><i></i></div>
+
     <h3 id="tripDlgTitle">Новая поездка</h3>
-    <div class="field"><input id="tdTitle" type="text" placeholder=" " maxlength="200"><label for="tdTitle">Название</label></div>
-    <div class="field"><input id="tdDest" type="text" placeholder=" " maxlength="200"><label for="tdDest">Куда (город, страна)</label></div>
-    <div class="row">
-      <div class="field filled"><input id="tdFrom" type="date"><label for="tdFrom">С</label></div>
-      <div class="field filled"><input id="tdTo" type="date"><label for="tdTo">По</label></div>
+    <p class="desc" id="tdHint" hidden></p>
+
+    <div class="td-block" id="tdWhat">
+      <div class="field"><input id="tdTitle" type="text" placeholder=" " maxlength="200"><label for="tdTitle">Название</label></div>
+      <div class="field"><input id="tdDest" type="text" placeholder=" " maxlength="200"><label for="tdDest">Куда (город, страна)</label></div>
     </div>
+
+    <div class="td-block" id="tdWhen">
+      <div class="row">
+        <div class="field filled"><input id="tdFrom" type="date"><label for="tdFrom">С</label></div>
+        <div class="field filled"><input id="tdTo" type="date"><label for="tdTo">По</label></div>
+      </div>
+      <div class="quick-dates" id="tdQuick">
+        <button type="button" class="chip-btn" data-dates="weekend">Ближайшие выходные</button>
+        <button type="button" class="chip-btn" data-dates="week">Неделя</button>
+        <button type="button" class="chip-btn" data-dates="clear">Пока не знаю</button>
+      </div>
+    </div>
+
     <!-- Валюту не спрашиваем: смета в рублях. Колонка в базе осталась —
          вернуть выбор, когда понадобится, будет правкой одной формы. -->
-    <div class="field filled">
-      <select id="tdStatus">
-        <option value="planning">Планируем</option>
-        <option value="active">В пути</option>
-        <option value="done">Съездили</option>
-      </select>
-      <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
-      <label>Состояние</label>
+    <div class="td-block" id="tdExtra">
+      <div class="field filled">
+        <select id="tdStatus">
+          <option value="planning">Планируем</option>
+          <option value="active">В пути</option>
+          <option value="done">Съездили</option>
+        </select>
+        <svg class="chev icon sm" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        <label>Состояние</label>
+      </div>
+      <div class="field"><textarea id="tdDesc" rows="3" placeholder=" " maxlength="4000"></textarea><label for="tdDesc">Описание (необязательно)</label></div>
     </div>
-    <div class="field"><textarea id="tdDesc" rows="3" placeholder=" " maxlength="4000"></textarea><label for="tdDesc">Описание (необязательно)</label></div>
+
+    <!-- Последний шаг мастера: поездка уже создана, показываем ссылку. -->
+    <div class="td-block" id="tdDone" hidden>
+      <div class="done-ic">
+        <svg class="icon xl" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <p class="lead" id="tdDoneText">Поездка создана.</p>
+      <div class="share-link">
+        <input id="tdInviteUrl" type="text" readonly>
+        <button class="btn tonal" id="tdInviteCopy">Копировать</button>
+      </div>
+      <p class="hint">Кто откроет ссылку и войдёт — станет участником: сможет добавлять места, отмечать пункты и делить счета.</p>
+    </div>
+
     <div class="dlg-actions">
       <button class="btn text danger" id="tripDeleteBtn" hidden>Удалить</button>
       <button class="btn text" id="tripLeaveBtn" hidden>Выйти из поездки</button>
+      <button class="btn text" id="tripBackBtn" hidden>Назад</button>
       <div class="spacer"></div>
-      <button class="btn text" data-close>Отмена</button>
+      <button class="btn text" id="tripCancelBtn" data-close>Отмена</button>
       <button class="btn filled" id="tripSaveBtn">Сохранить</button>
     </div>
   </div>
