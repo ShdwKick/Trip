@@ -224,6 +224,17 @@ a{color:var(--md-sys-color-primary)}
   animation:rise .45s var(--ease-emph-dec) both;
 }
 .trip-card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
+.trip-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+/* Удаление не должно быть первым, что видно на карточке: показываем на
+   наведении, а на тач-экранах (где наведения нет) — всегда. */
+.tc-del{
+  position:absolute;right:6px;bottom:6px;
+  color:var(--md-sys-color-on-surface-variant);
+  opacity:0;transition:opacity .18s,color .18s;
+}
+.trip-card:hover .tc-del,.tc-del:focus-visible{opacity:1}
+.tc-del:hover{color:var(--md-sys-color-error)}
+@media (hover:none){.tc-del{opacity:.6}}
 .trip-card::before{
   content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
   background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.75;

@@ -263,7 +263,13 @@ function renderTrips() {
     : `Вы вошли как ${who(state.me)}`;
 
   trips.forEach((t, i) => {
-    const card = el("button", "trip-card");
+    // Не <button>: внутри карточки живёт кнопка удаления, а кнопка в кнопке —
+    // недопустимая разметка, и браузеры разбирают её как придётся. Поэтому div
+    // с ролью и клавиатурой вручную: Enter и пробел должны открывать карточку
+    // так же, как настоящую кнопку.
+    const card = el("div", "trip-card");
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
     card.style.animationDelay = Math.min(i * 40, 240) + "ms";
     const pct = t.places ? Math.round((t.placesDone / t.places) * 100) : 0;
     card.innerHTML = `
@@ -280,7 +286,23 @@ function renderTrips() {
         ${t.photos ? `<span class="bit">${svg('<path d="M3 7h3l2-2h8l2 2h3v13H3z"/><circle cx="12" cy="13" r="4"/>', "icon xs")}${t.photos}</span>` : ""}
         ${t.myRole === "owner" ? '<span class="spacer"></span><span class="bit">моя</span>' : ""}
       </div>`;
-    card.onclick = () => { location.hash = "#/t/" + t.id; };
+    const open = () => { location.hash = "#/t/" + t.id; };
+    card.onclick = open;
+    card.onkeydown = e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    };
+
+    // Удалить может владелец — и только он, это же проверяет сервер. Раньше
+    // кнопка жила в диалоге правки: чтобы убрать ненужную поездку, приходилось
+    // сначала в неё зайти.
+    if (t.myRole === "owner") {
+      const del = el("button", "icon-btn xs tc-del");
+      del.title = "Удалить поездку";
+      del.setAttribute("aria-label", `Удалить поездку «${t.title}»`);
+      del.innerHTML = svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>', "icon sm");
+      del.onclick = e => { e.stopPropagation(); askDeleteTrip(t); };
+      card.append(del);
+    }
     grid.append(card);
   });
 }
@@ -1049,14 +1071,37 @@ $("tdInviteCopy").onclick = async () => {
   catch { $("tdInviteUrl").select(); snack("Скопируйте ссылку вручную"); }
 };
 
-$("tripDeleteBtn").onclick = () => {
-  const t = editingTrip;
-  confirmDialog("Удалить поездку?", `«${t.title}» исчезнет у всех участников вместе с местами и фотографиями. Отменить это будет нельзя.`, "Удалить", async () => {
-    closeScrim("tripScrim");
-    await act(() => api("/trips/" + t.id, { method: "DELETE" }), "Поездка удалена");
-    location.hash = "#/";
+/**
+ * Удаление поездки — из списка и из диалога правки одним кодом.
+ *
+ * В предупреждении называем, что именно пропадёт и у скольких людей: «исчезнет
+ * вместе с местами и фотографиями» звучит одинаково и для пустой заготовки, и
+ * для поездки с полусотней позиций и общими счетами.
+ */
+function askDeleteTrip(trip) {
+  const places = trip.places ?? state.trip?.places?.length;
+  const photos = trip.photos ?? (state.trip ? state.trip.places.reduce((n, p) => n + p.photos.length, 0) : 0);
+  const members = trip.members ?? state.trip?.members?.length;
+
+  const parts = [];
+  if (places) parts.push(`${places} ${plural(places, "место", "места", "мест")}`);
+  if (photos) parts.push(`${photos} ${plural(photos, "фотография", "фотографии", "фотографий")}`);
+  const what = parts.length ? ` Пропадут ${parts.join(" и ")}.` : "";
+  // Не «who» — так называется помощник с подписью человека, и затенять его
+  // внутри функции значит однажды получить строку вместо имени.
+  const forAll = members > 1 ? ` Поездка исчезнет у всех ${members} участников.` : "";
+
+  confirmDialog("Удалить поездку?", `«${trip.title}» удаляется насовсем — отменить будет нельзя.${what}${forAll}`, "Удалить", async () => {
+    if ($("tripScrim").classList.contains("open")) closeScrim("tripScrim");
+    const ok = await act(() => api("/trips/" + trip.id, { method: "DELETE" }), "Поездка удалена");
+    if (!ok) return;
+    // Смотрели именно её — уходим к списку; смотрели список — обновляем его.
+    if (location.hash.startsWith("#/t/" + trip.id)) location.hash = "#/";
+    else showTrips().catch(console.error);
   });
-};
+}
+
+$("tripDeleteBtn").onclick = () => askDeleteTrip(editingTrip);
 
 $("tripLeaveBtn").onclick = () => {
   const t = editingTrip;
