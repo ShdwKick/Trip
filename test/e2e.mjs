@@ -7,7 +7,9 @@
  * Запуск (Node 24; на Node 22 добавьте --experimental-sqlite):
  *   node test/e2e.mjs
  *
- * Порты 8788 и 8790 на время прогона должны быть свободны. Ожидает, что рядом
+ * Порты 8788 и 8790 на время прогона должны быть свободны — или задайте свои:
+ *   AUTH_PORT=8793 TRIP_PORT=8795 node test/e2e.mjs
+ * Ожидает, что рядом
  * лежит репозиторий Auth — в ../Auth (или укажите AUTH_DIR).
  */
 import crypto from "node:crypto";
@@ -19,15 +21,17 @@ import { execFileSync, spawn } from "node:child_process";
 const TRIP_DIR = path.resolve(fileURLToPath(import.meta.url), "../..");
 const AUTH_DIR = process.env.AUTH_DIR || path.join(TRIP_DIR, "..", "Auth");
 const WORK = path.join(TRIP_DIR, "test", ".work");
-const AUTH = "http://localhost:8788";
-const TRIP = "http://localhost:8790";
+const AUTH_PORT = parseInt(process.env.AUTH_PORT || "8788", 10);
+const TRIP_PORT = parseInt(process.env.TRIP_PORT || "8790", 10);
+const AUTH = `http://localhost:${AUTH_PORT}`;
+const TRIP = `http://localhost:${TRIP_PORT}`;
 const NODE_ARGS = process.version.startsWith("v22") ? ["--experimental-sqlite"] : [];
 
 if (!fs.existsSync(path.join(AUTH_DIR, "server.js"))) {
   console.error(`Не нашёл auth-сервис в ${AUTH_DIR}. Укажите путь через AUTH_DIR.`);
   process.exit(1);
 }
-for (const [url, port] of [[AUTH, 8788], [TRIP, 8790]]) {
+for (const [url, port] of [[AUTH, AUTH_PORT], [TRIP, TRIP_PORT]]) {
   try {
     await fetch(url + "/api/health", { signal: AbortSignal.timeout(700) });
     console.error(`Порт ${port} уже занят — остановите тот сервис и повторите.`);
@@ -63,9 +67,9 @@ function start(name, cwd, env) {
   p.stderr.on("data", d => log.push(String(d)));
   procs.push({ name, p, log });
 }
-start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: "8788", HOST: "127.0.0.1" });
+start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1" });
 start("trip", TRIP_DIR, {
-  ...process.env, DATA_DIR: WORK + "/trip", PORT: "8790", HOST: "127.0.0.1",
+  ...process.env, DATA_DIR: WORK + "/trip", PORT: String(TRIP_PORT), HOST: "127.0.0.1",
   AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "trip",
   RESOLVE_SHORT_LINKS: "0",   // в тесте наружу не ходим
 });

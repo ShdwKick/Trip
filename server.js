@@ -723,12 +723,15 @@ const server = http.createServer(async (req, res) => {
     // Для Admin: server-to-server по общему ключу (см. admin-internal.js), не SSO.
     if (p === "/internal/stats" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
       return json(res, 200, {
         ok: true,
         trips: db.prepare("SELECT COUNT(*) AS n FROM trips").get().n,
         places: db.prepare("SELECT COUNT(*) AS n FROM places").get().n,
         photos: db.prepare("SELECT COUNT(*) AS n FROM photos").get().n,
         settlements: db.prepare("SELECT COUNT(*) AS n FROM settlements").get().n,
+        tripsCreated7d: db.prepare("SELECT COUNT(*) AS n FROM trips WHERE created_at > ?").get(since7d).n,
+        placesCreated7d: db.prepare("SELECT COUNT(*) AS n FROM places WHERE created_at > ?").get(since7d).n,
       });
     }
     if (p === "/internal/logs" && req.method === "GET") {
@@ -737,6 +740,28 @@ const server = http.createServer(async (req, res) => {
       const limit = url.searchParams.get("limit");
       return json(res, 200, {
         logs: adminLog.recent({ since: since ? Number(since) : undefined, limit: limit ? Number(limit) : undefined }),
+      });
+    }
+
+    // Список поездок для Admin. Название ручки — "rooms" (общее с Movies, где
+    // это буквально комнаты): в обоих сервисах это один и тот же смысл — общая
+    // группа с кодом приглашения, к которой присоединяются несколько человек,
+    // только называется в каждом сервисе по-своему.
+    if (p === "/internal/rooms" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const rows = db.prepare(`
+        SELECT t.id, t.title, t.destination, t.status, t.join_code, t.created_at,
+               (SELECT COUNT(*) FROM trip_members tm WHERE tm.trip_id = t.id) AS members,
+               (SELECT COUNT(*) FROM places pl WHERE pl.trip_id = t.id) AS places
+        FROM trips t
+        ORDER BY t.created_at DESC
+        LIMIT 200
+      `).all();
+      return json(res, 200, {
+        rooms: rows.map(r => ({
+          id: r.id, title: r.title, destination: r.destination || null, status: r.status,
+          joinCode: r.join_code || null, membersCount: r.members, placesCount: r.places, createdAt: r.created_at,
+        })),
       });
     }
 

@@ -31,7 +31,12 @@ import { execFileSync, spawn } from "node:child_process";
 const TRIP_DIR = path.resolve(fileURLToPath(import.meta.url), "..");
 const AUTH_DIR = process.env.AUTH_DIR || path.join(TRIP_DIR, "..", "Auth");
 const WORK = path.join(TRIP_DIR, ".dev");
-const AUTH_PORT = 8788, TRIP_PORT = 8790;
+// Порты можно сдвинуть, если привычные заняты чем-то своим:
+//   TRIP_PORT=8795 AUTH_PORT=8793 node dev.mjs
+// Адрес возврата регистрируется под выбранный порт тут же, поэтому вход
+// продолжает работать: auth сверяет redirect_uri побайтово.
+const AUTH_PORT = parseInt(process.env.AUTH_PORT || "8788", 10);
+const TRIP_PORT = parseInt(process.env.TRIP_PORT || "8790", 10);
 const AUTH = `http://localhost:${AUTH_PORT}`;
 const TRIP = `http://localhost:${TRIP_PORT}`;
 const LOGIN = process.env.DEV_LOGIN || "dev";
@@ -61,7 +66,7 @@ fs.mkdirSync(path.join(WORK, "trip"), { recursive: true });
 for (const [url, port] of [[AUTH, AUTH_PORT], [TRIP, TRIP_PORT]]) {
   try {
     await fetch(url + "/api/health", { signal: AbortSignal.timeout(700) });
-    console.error(`Порт ${port} уже занят — остановите тот процесс и повторите.`);
+    console.error(`Порт ${port} уже занят. Остановите тот процесс — или запустите на других портах:\n  TRIP_PORT=8795 AUTH_PORT=8793 node dev.mjs`);
     process.exit(1);
   } catch { /* свободен, продолжаем */ }
 }

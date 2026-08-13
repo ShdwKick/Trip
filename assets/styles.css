@@ -475,6 +475,19 @@ a{color:var(--md-sys-color-primary)}
 @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.97)}}
 .dlg-actions{display:flex;align-items:center;gap:8px;margin-top:22px;flex-wrap:wrap}
 
+/* ===================== ЗНАКОМСТВО ===================== */
+.dialog.tour{width:min(440px,100%);text-align:center}
+.tour-art{
+  width:72px;height:72px;margin:8px auto 16px;border-radius:50%;display:grid;place-items:center;
+  background:color-mix(in srgb,var(--flame-tip) 16%,var(--md-sys-color-surface-container));
+  color:var(--flame-base);
+}
+[data-theme="dark"] .tour-art{color:var(--flame-tip)}
+.dialog.tour .lead{margin-top:8px;color:var(--md-sys-color-on-surface-variant);line-height:1.6;font-size:14.5px}
+.dialog.tour .dlg-actions{margin-top:24px}
+/* Смена экрана — тем же движением, что и в мастере создания. */
+.dialog.tour h3,.dialog.tour .lead,.tour-art{animation:step .22s var(--ease-emph-dec) both}
+
 /* ===================== МАСТЕР СОЗДАНИЯ ===================== */
 .steps{display:flex;gap:6px;margin-bottom:14px}
 .steps>i{
