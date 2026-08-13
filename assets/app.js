@@ -193,6 +193,7 @@ async function init() {
   $("accountBtn").hidden = false;
   $("logoutBtn").hidden = false;
   $("tourBtn").hidden = false;
+  $("tourBtn").onclick = () => openTour();
   $("accountBtn").onclick = () => window.open(auth.accountUrl(), "_blank", "noopener");
   $("logoutBtn").onclick = () => auth.logout();
 
@@ -252,7 +253,7 @@ async function showTrips() {
   state.trips = data.trips;
   setSync("ok");
   renderTrips();
-  maybeShowTour();
+  maybeStartTour("list");
 }
 
 function renderTrips() {
@@ -440,6 +441,7 @@ function renderTrip() {
 
   renderDebts();
   renderPlaces();
+  maybeStartTour("trip");   // свой тур: на списке поездок рассказывать про счета не на чем
 }
 
 // ───────────────────────── кто кому должен ─────────────────────────
@@ -919,85 +921,6 @@ function confirmDialog(title, text, okLabel, onOk) {
   $("cfOk").textContent = okLabel;
   $("cfOk").onclick = async () => { closeScrim("confirmScrim"); await onOk(); };
   openScrim("confirmScrim");
-}
-
-// ───────────────────────── знакомство ─────────────────────────
-/**
- * Четыре экрана про то, чем этот сервис отличается от заметки в мессенджере.
- *
- * Почему рассказ, а не подсветка кнопок: всё главное — места, счета, расчёты —
- * живёт внутри поездки, а у нового человека её ещё нет. Стрелка указывала бы на
- * пустой экран, а после создания поездки интерфейс уже другой, и подсказки
- * пришлось бы вести заново.
- */
-const TOUR = [
-  {
-    title: "Один список на всех",
-    text: "Поездка — это общий чек-лист. Кто угодно из участников добавляет места, отмечает пройденное, и остальные видят это сразу. Никто не пересылает друг другу списки.",
-    art: '<path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
-  },
-  {
-    title: "Ссылка с карты превращается в точку",
-    text: "Вставьте в место ссылку из Яндекс.Карт, Google Maps или 2ГИС — координаты определятся сами. Дальше сервис построит маршрут по всем точкам дня, в том порядке, в котором вы их расставили.",
-    art: '<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
-  },
-  {
-    title: "Счета делятся как в жизни",
-    text: "У места указывают, кто платил и как делить: поровну, на выбранных или каждому своя сумма. Общий счёт в ресторане можно разобрать по позициям — сфотографируйте чек, и строки появятся сами. Чайник на троих делится на троих.",
-    art: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/>',
-  },
-  {
-    title: "В конце — кто кому должен",
-    text: "Сервис сводит все счета и показывает минимум переводов: не «долг по каждому чеку», а «Маша отдаёт Даниле 1 400». Перевели — отметили, получатель подтвердил. Деньги идут мимо нас, мы только считаем.",
-    art: '<path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
-  },
-];
-
-const TOUR_SEEN = "trip.tourSeen";
-let tourStep = 0;
-
-function openTour(step = 0) {
-  tourStep = step;
-  renderTour();
-  openScrim("tourScrim");
-}
-
-function renderTour() {
-  const slide = TOUR[tourStep];
-  $("tourArt").innerHTML = svg(slide.art, "icon xl");
-  $("tourTitle").textContent = slide.title;
-  $("tourText").textContent = slide.text;
-  $("tourSteps").querySelectorAll("i").forEach((dot, i) => {
-    dot.className = i === tourStep ? "on" : i < tourStep ? "done" : "";
-  });
-  $("tourBackBtn").hidden = tourStep === 0;
-  const last = tourStep === TOUR.length - 1;
-  $("tourNextBtn").textContent = last ? "Создать поездку" : "Дальше";
-  $("tourSkipBtn").textContent = last ? "Позже" : "Пропустить";
-}
-
-$("tourBackBtn").onclick = () => { tourStep = Math.max(0, tourStep - 1); renderTour(); };
-$("tourSkipBtn").onclick = () => { finishTour(); closeScrim("tourScrim"); };
-$("tourNextBtn").onclick = () => {
-  if (tourStep < TOUR.length - 1) { tourStep++; renderTour(); return; }
-  finishTour();
-  closeScrim("tourScrim");
-  openTripDialog();
-};
-$("tourBtn").onclick = () => openTour();
-
-/** Отметку храним в браузере: своей таблицы настроек у сервиса нет, а заводить
-    её ради одного флага дороже, чем показать знакомство второй раз на новом
-    устройстве. */
-function finishTour() {
-  try { localStorage.setItem(TOUR_SEEN, "1"); } catch { /* приватный режим — переживём */ }
-}
-
-/** Первый вход: поездок нет и знакомство не показывали. */
-function maybeShowTour() {
-  let seen = true;
-  try { seen = !!localStorage.getItem(TOUR_SEEN); } catch { /* нет доступа — не навязываемся */ }
-  if (!seen && !state.trips.length) openTour();
 }
 
 // ───────────────────────── диалог поездки ─────────────────────────

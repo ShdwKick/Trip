@@ -182,25 +182,6 @@
 
 </div>
 
-<!-- ===================== ЗНАКОМСТВО =====================
-     Четыре экрана вместо подсказок поверх интерфейса: почти всё, что стоит
-     показать, живёт внутри поездки, а у нового человека её ещё нет — стрелка
-     указывала бы на пустое место. -->
-<div class="scrim" id="tourScrim">
-  <div class="dialog tour">
-    <div class="steps" id="tourSteps"><i></i><i></i><i></i><i></i></div>
-    <div class="tour-art" id="tourArt"></div>
-    <h3 id="tourTitle"></h3>
-    <p class="lead" id="tourText"></p>
-    <div class="dlg-actions">
-      <button class="btn text" id="tourSkipBtn">Пропустить</button>
-      <div class="spacer"></div>
-      <button class="btn text" id="tourBackBtn" hidden>Назад</button>
-      <button class="btn filled" id="tourNextBtn">Дальше</button>
-    </div>
-  </div>
-</div>
-
 <!-- ===================== ДИАЛОГ ПОЕЗДКИ ===================== -->
 <div class="scrim" id="tripScrim">
   <div class="dialog">
@@ -587,11 +568,21 @@
   </div>
 </div>
 
+<!-- Подсветка для обучения: затемнение с «окном» на реальном элементе и
+     карточка рядом. Разметка та же, что в «Моих финансах». -->
+<div class="onb-scrim" id="onbScrim">
+  <div class="onb-spotlight" id="onbSpotlight"></div>
+  <div class="onb-card" id="onbCard"></div>
+</div>
+
 <div class="snack" id="snack"></div>
 
 <script src="assets/auth-client.js"></script>
 <script src="assets/brand.js"></script>
 <script src="assets/receipt.js"></script>
 <script src="assets/app.js"></script>
+<!-- После app.js: обучение пользуется его помощниками ($, esc) и подписывается
+     на клики по своей карточке сразу при загрузке. -->
+<script src="assets/onboarding.js"></script>
 </body>
 </html>

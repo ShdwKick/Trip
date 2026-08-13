@@ -475,18 +475,44 @@ a{color:var(--md-sys-color-primary)}
 @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.97)}}
 .dlg-actions{display:flex;align-items:center;gap:8px;margin-top:22px;flex-wrap:wrap}
 
-/* ===================== ЗНАКОМСТВО ===================== */
-.dialog.tour{width:min(440px,100%);text-align:center}
-.tour-art{
-  width:72px;height:72px;margin:8px auto 16px;border-radius:50%;display:grid;place-items:center;
-  background:color-mix(in srgb,var(--flame-tip) 16%,var(--md-sys-color-surface-container));
-  color:var(--flame-base);
+/* ===================== ЗНАКОМСТВО =====================
+   Затемнение с «дырой» на подсвеченном элементе: один блок с box-shadow
+   0 0 0 9999px — так «дыра» получается сама собой, без клип-путей и без
+   раскладки затемнения на четыре прямоугольника вокруг цели. Приём и разметка
+   те же, что в «Моих финансах», чтобы обучение выглядело одинаково.
+   Слой выше снека (80): подсказка не должна оказаться под всплывашкой. */
+.onb-scrim{position:fixed;inset:0;z-index:90;display:none}
+.onb-scrim.show{display:block}
+.onb-spotlight{
+  position:fixed;border-radius:var(--md-sys-shape-corner-l);
+  box-shadow:0 0 0 9999px rgba(10,8,6,.62);pointer-events:none;
+  outline:2px solid var(--flame-tip);outline-offset:3px;
+  transition:top .25s var(--ease-emph-dec),left .25s var(--ease-emph-dec),
+             width .25s var(--ease-emph-dec),height .25s var(--ease-emph-dec);
 }
-[data-theme="dark"] .tour-art{color:var(--flame-tip)}
-.dialog.tour .lead{margin-top:8px;color:var(--md-sys-color-on-surface-variant);line-height:1.6;font-size:14.5px}
-.dialog.tour .dlg-actions{margin-top:24px}
-/* Смена экрана — тем же движением, что и в мастере создания. */
-.dialog.tour h3,.dialog.tour .lead,.tour-art{animation:step .22s var(--ease-emph-dec) both}
+.onb-card{
+  position:fixed;z-index:91;max-width:320px;padding:18px;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e2);
+  animation:pop .25s var(--ease-emph-dec);
+}
+.onb-card.center{
+  top:50%;left:50%;max-width:360px;text-align:center;
+  animation:popCenter .25s var(--ease-emph-dec) forwards;
+}
+@keyframes popCenter{from{opacity:0;transform:translate(-50%,-50%) scale(.92)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.onb-card h3{font-size:17px;margin-bottom:6px}
+.onb-card p{font-size:13px;line-height:1.5;color:var(--md-sys-color-on-surface-variant);margin-bottom:14px}
+.onb-actions{display:flex;align-items:center;gap:8px}
+.onb-actions .spacer{flex:1}
+.onb-dots{display:flex;gap:5px;justify-content:center;margin-bottom:10px}
+.onb-dots i{width:6px;height:6px;border-radius:50%;background:var(--md-sys-color-outline-variant);display:block}
+.onb-dots i.on{background:var(--flame-tip)}
+/* Подсвеченная цель на время шага показывается целиком, даже если обычно
+   проявляется по наведению. */
+.onb-target{opacity:1 !important}
+@media(max-width:520px){.onb-card{max-width:calc(100vw - 32px)}}
 
 /* ===================== МАСТЕР СОЗДАНИЯ ===================== */
 .steps{display:flex;gap:6px;margin-bottom:14px}
