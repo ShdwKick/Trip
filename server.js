@@ -36,6 +36,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
+const { checkAdminKey, createAdminLog } = require("./admin-internal");
 
 const PORT = parseInt(process.env.PORT || "8790", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -204,6 +205,9 @@ for (const sql of [
 ]) {
   try { db.exec(sql); } catch { /* уже есть */ }
 }
+
+// Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
+const adminLog = createAdminLog(db);
 
 const stmt = {
   // Ссылку на базу держим здесь намеренно. После инициализации `db` больше нигде
@@ -715,6 +719,27 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === "/api/health") return json(res, 200, { ok: true });
+
+    // Для Admin: server-to-server по общему ключу (см. admin-internal.js), не SSO.
+    if (p === "/internal/stats" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, {
+        ok: true,
+        trips: db.prepare("SELECT COUNT(*) AS n FROM trips").get().n,
+        places: db.prepare("SELECT COUNT(*) AS n FROM places").get().n,
+        photos: db.prepare("SELECT COUNT(*) AS n FROM photos").get().n,
+        settlements: db.prepare("SELECT COUNT(*) AS n FROM settlements").get().n,
+      });
+    }
+    if (p === "/internal/logs" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const since = url.searchParams.get("since");
+      const limit = url.searchParams.get("limit");
+      return json(res, 200, {
+        logs: adminLog.recent({ since: since ? Number(since) : undefined, limit: limit ? Number(limit) : undefined }),
+      });
+    }
+
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику и менялся
     // одной переменной окружения.
     if (p === "/api/config") return json(res, 200, {
@@ -738,6 +763,7 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     if (e && e.tooLarge) return json(res, 413, { error: "too large" });
     console.error("Ошибка обработки запроса:", e);
+    adminLog.error("Ошибка обработки запроса", { path: p, method: req.method, message: e.message });
     if (!res.headersSent) json(res, 500, { error: "server error" });
     else res.end();
   }
