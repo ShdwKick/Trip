@@ -226,9 +226,12 @@ a{color:var(--md-sys-color-primary)}
 .trip-card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
 .trip-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 /* Удаление не должно быть первым, что видно на карточке: показываем на
-   наведении, а на тач-экранах (где наведения нет) — всегда. */
+   наведении, а на тач-экранах (где наведения нет) — всегда.
+   Кнопка стоит в подвале карточки, а не поверх него: метка «моя» появляется по
+   тому же условию и у того же края, и наложенная кнопка её перекрывала.
+   Отрицательные поля держат 32-пиксельную цель нажатия, не раздвигая строку. */
 .tc-del{
-  position:absolute;right:6px;bottom:6px;
+  flex:none;margin:-7px -6px -7px 2px;
   color:var(--md-sys-color-on-surface-variant);
   opacity:0;transition:opacity .18s,color .18s;
 }
