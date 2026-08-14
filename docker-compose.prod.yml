@@ -18,6 +18,13 @@ services:
       # он подписан внутрь токенов и сверяется побайтово. Без него сервис не стартует.
       AUTH_ISSUER: https://auth.burninghouse.ru
       AUTH_CLIENT_ID: trip
+      # Свой адрес — нужен, чтобы собрать в письме-напоминании ссылку на
+      # поездку. Без него значок напоминания в списке сборов не рисуется вовсе.
+      PUBLIC_URL: https://trip.burninghouse.ru
+      # Почта напоминаний о сборах — тот же секрет, что и у Auth (см. её .env);
+      # без ключа письма просто печатаются в лог контейнера вместо отправки.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-BurningHouse <noreply@burninghouse.ru>}
       # Общий секрет для Admin: доступ к /internal/stats и /internal/logs.
       # То же самое значение — в Auth, Финансах, Movies и в самом Admin.
       # Берётся из того же .env, что и GIGACHAT_AUTH_KEY ниже (права 600), в

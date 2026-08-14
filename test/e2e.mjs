@@ -452,63 +452,81 @@ ok("вещь убрана", r.status === 200 && r.body.packing.length === 0);
 ok("чужой вещи в другой поездке нет", (await asJson(me.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: {} })).status === 404);
 
 /* ---------- 13. Напоминания на почту ---------- */
-// danil@example.com указан при заведении аккаунта, у sputnik почты нет —
-// этим и пользуемся, чтобы проверить отказ без неё.
+// Одно напоминание на весь список сборов, не на вещь — договорились именно
+// так после того, как поштучные напоминания оказались избыточны: за сборами
+// идут все сразу. danil@example.com указан при заведении аккаунта, у sputnik
+// почты нет — этим и пользуемся, чтобы проверить отказ без неё.
 const cfg2 = await (await fetch(TRIP + "/api/config")).json();
 ok("конфиг сообщает о включённых напоминаниях", cfg2.reminders === true && cfg2.remindOffsets?.length === 5, JSON.stringify(cfg2));
 
 r = await asJson(me.access_token, `/trips/${tripId}/packing`, { method: "POST", body: { title: "Аптечка" } });
+r = await asJson(me.access_token, `/trips/${tripId}/packing`, { method: "POST", body: { title: "Зарядка" } });
+ok("новых вещей без напоминания", r.body.packingRemind === null);
 const pill = r.body.packing.find(i => i.title === "Аптечка");
-ok("новая вещь без напоминания", pill.remind === null);
+const charger = r.body.packing.find(i => i.title === "Зарядка");
 
-r = await asJson(friend.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "1d" } });
+r = await asJson(friend.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { offset: "1d" } });
 ok("БЕЗ ПОЧТЫ НАПОМИНАНИЕ НЕ СТАВИТСЯ", r.status === 400 && r.body.error === "no_email", JSON.stringify(r.body));
 
-r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "не число" } });
+r = await asJson(me.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { offset: "не число" } });
 ok("неизвестный срок отбит", r.status === 400 && r.body.error === "bad offset");
 
-r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "3d" } });
-ok("напоминание поставлено", r.status === 200 && r.body.packing.find(i => i.id === pill.id)?.remind?.offset === "3d", JSON.stringify(r.body));
+r = await asJson(me.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { offset: "3d" } });
+ok("напоминание поставлено НА СПИСОК, А НЕ НА ВЕЩЬ", r.status === 200 && r.body.packingRemind?.offset === "3d", JSON.stringify(r.body));
 
 r = await asJson(friend.access_token, "/trips/" + tripId);
-ok("ЧУЖОЕ НАПОМИНАНИЕ НЕ ВИДНО", r.body.packing.find(i => i.id === pill.id)?.remind === null);
+ok("ЧУЖОЕ НАПОМИНАНИЕ НЕ ВИДНО", r.body.packingRemind === null);
 
-r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "1h" } });
-const afterChange = r.body.packing.find(i => i.id === pill.id)?.remind;
-ok("срок можно поменять, метка «отправлено» сбрасывается", afterChange?.offset === "1h" && afterChange?.sent === false);
+r = await asJson(me.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { offset: "1h" } });
+ok("срок можно поменять, метка «отправлено» сбрасывается", r.body.packingRemind?.offset === "1h" && r.body.packingRemind?.sent === false);
+
+// Пометим одну вещь сложенной, вторую — нет: письмо обязано перечислить
+// только несобранное лично у меня, а не список целиком.
+await asJson(me.access_token, `/trips/${tripId}/packing/${charger.id}/packed`, { method: "POST", body: { packed: true } });
 
 // Поездка «Грузия на майские» начинается 2026-05-01 — раньше сегодняшней даты
 // (сейчас 2026-08-14), поэтому любой срок для неё уже наступил. Заведём вторую
 // поездку далеко в будущем — на ней ничего наступить не должно.
 r = await asJson(me.access_token, "/trips", { method: "POST", body: { title: "Далёкая поездка", startsOn: "2030-01-01" } });
 const futureTrip = r.body.trip.id;
-r = await asJson(me.access_token, `/trips/${futureTrip}/packing`, { method: "POST", body: { title: "Компас" } });
-const futureItem = r.body.packing[0];
-await asJson(me.access_token, `/trips/${futureTrip}/packing/${futureItem.id}/remind`, { method: "POST", body: { offset: "1h" } });
+await asJson(me.access_token, `/trips/${futureTrip}/packing`, { method: "POST", body: { title: "Компас" } });
+await asJson(me.access_token, `/trips/${futureTrip}/packing/remind`, { method: "POST", body: { offset: "1h" } });
 
+const tripProc = procs.find(p => p.name === "trip");
+const logBefore = tripProc.log.length;
 r = await fetch(TRIP + "/internal/reminders/check", { method: "POST", headers: { "x-admin-key": ADMIN_KEY } });
 const checkResult = await r.json();
 ok("ручной прогон сработал", r.status === 200 && checkResult.ok === true, JSON.stringify(checkResult));
 ok("отправлено ровно одно письмо — только просроченное", checkResult.sent === 1, JSON.stringify(checkResult));
 
+const mailLog = tripProc.log.slice(logBefore).join("");
+ok("В ПИСЬМЕ НЕСОБРАННАЯ ВЕЩЬ", mailLog.includes("Аптечка"), mailLog);
+ok("СОБРАННАЯ ВЕЩЬ В ПИСЬМО НЕ ПОПАЛА", !mailLog.includes("Зарядка"), mailLog);
+
 r = await asJson(me.access_token, "/trips/" + tripId);
-ok("просроченное отмечено отправленным", r.body.packing.find(i => i.id === pill.id)?.remind?.sent === true);
+ok("просроченное отмечено отправленным", r.body.packingRemind?.sent === true);
 r = await asJson(me.access_token, "/trips/" + futureTrip);
-ok("будущее — ещё не отправлено", r.body.packing.find(i => i.id === futureItem.id)?.remind?.sent === false);
+ok("будущее — ещё не отправлено", r.body.packingRemind?.sent === false);
 
 r = await fetch(TRIP + "/internal/reminders/check", { method: "POST", headers: { "x-admin-key": ADMIN_KEY } });
 ok("повторный прогон не шлёт то же письмо снова", (await r.json()).sent === 0);
 ok("без ключа прогон запретят", (await fetch(TRIP + "/internal/reminders/check", { method: "POST" })).status === 403);
 
-r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { enabled: false } });
-ok("напоминание выключено", r.body.packing.find(i => i.id === pill.id)?.remind === null);
+// Собрали всё — новая отправка молчит, хотя срок сбрасывали заново.
+await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/packed`, { method: "POST", body: { packed: true } });
+await asJson(me.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { offset: "1h" } });
+r = await fetch(TRIP + "/internal/reminders/check", { method: "POST", headers: { "x-admin-key": ADMIN_KEY } });
+ok("ВСЁ СОБРАНО — ПИСЬМО НЕ УХОДИТ, ХОТЯ СРОК НАСТУПИЛ", (await r.json()).sent === 0);
+r = await asJson(me.access_token, "/trips/" + tripId);
+ok("но отметку «отправлено» всё равно поставили — не спрашивать каждые 5 минут", r.body.packingRemind?.sent === true);
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/remind`, { method: "POST", body: { enabled: false } });
+ok("напоминание выключено", r.body.packingRemind === null);
 ok("тестовую поездку из будущего убрали", (await asJson(me.access_token, "/trips/" + futureTrip, { method: "DELETE" })).status === 200);
 
 r = await asJson(me.access_token, "/trips", { method: "POST", body: { title: "Без даты" } });
 const noDateTrip = r.body.trip.id;
-r = await asJson(me.access_token, `/trips/${noDateTrip}/packing`, { method: "POST", body: { title: "Гид" } });
-const noDateItem = r.body.packing[0];
-r = await asJson(me.access_token, `/trips/${noDateTrip}/packing/${noDateItem.id}/remind`, { method: "POST", body: { offset: "1d" } });
+r = await asJson(me.access_token, `/trips/${noDateTrip}/packing/remind`, { method: "POST", body: { offset: "1d" } });
 ok("БЕЗ ДАТЫ НАЧАЛА НАПОМИНАНИЕ НЕ СТАВИТСЯ", r.status === 400 && r.body.error === "no_date", JSON.stringify(r.body));
 ok("тестовую поездку без даты убрали", (await asJson(me.access_token, "/trips/" + noDateTrip, { method: "DELETE" })).status === 200);
 

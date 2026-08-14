@@ -14,8 +14,16 @@
 
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function shell({ preheader, heading, intro, buttonLabel, link, footNote }) {
+function shell({ preheader, heading, intro, items, buttonLabel, link, footNote }) {
   const safeLink = escapeHtml(link);
+  // Список вещей — необязательный блок между текстом и кнопкой; своей же
+  // разметкой таблиц, чтобы не отступать от правила «никакого CSS вне inline».
+  const itemsBlock = items?.length ? `<tr><td style="padding:14px 36px 0;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff6ec;border-radius:14px;">
+  <tr><td style="padding:14px 18px;font-size:14px;line-height:1.9;color:#1c1b20;">
+    ${items.map(i => `• ${escapeHtml(i)}`).join("<br>")}
+  </td></tr></table>
+</td></tr>` : "";
   return `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
 <body style="margin:0;padding:0;background:#fff6ec;">
@@ -31,6 +39,7 @@ function shell({ preheader, heading, intro, buttonLabel, link, footNote }) {
   <h1 style="margin:0;font-size:22px;line-height:1.3;font-weight:600;color:#1c1b20;">${escapeHtml(heading)}</h1>
   <p style="margin:12px 0 0;font-size:15px;line-height:1.6;color:#46464f;">${escapeHtml(intro)}</p>
 </td></tr>
+${itemsBlock}
 <tr><td style="padding:28px 36px 4px;">
   <table role="presentation" cellpadding="0" cellspacing="0"><tr>
     <td style="border-radius:9999px;background:#5b4fe0;">
@@ -55,26 +64,34 @@ function shell({ preheader, heading, intro, buttonLabel, link, footNote }) {
 </body></html>`;
 }
 
-/** Напоминание собрать конкретную вещь — единственное письмо, которое отсюда уходит. */
-function packingReminder({ link, tripTitle, itemTitle, whenLabel }) {
+/**
+ * Напоминание собраться — одно письмо на весь список, не на вещь: за сборами
+ * идут все сразу, а не по одной. `items` — то, что этот конкретный человек
+ * ещё не отметил «сложил» на момент отправки (личное, как и сама отметка).
+ */
+function packingReminder({ link, tripTitle, whenLabel, items }) {
+  const heading = "Не забудьте собраться";
+  const intro = `Вы попросили напомнить ${whenLabel} до начала поездки «${tripTitle}». Вот что по списку сборов у вас ещё не отмечено:`;
+
   const html = shell({
-    preheader: `Поездка «${tripTitle}» — не забудьте: ${itemTitle}.`,
-    heading: `Не забудьте: ${itemTitle}`,
-    intro: `Вы попросили напомнить ${whenLabel} до начала поездки «${tripTitle}». Загляните в список сборов — вдруг ещё нужно что-то докупить или найти.`,
-    buttonLabel: "Открыть поездку",
+    preheader: `Поездка «${tripTitle}» — ещё не собрано: ${items.length} ${items.length === 1 ? "пункт" : "пункта(-ов)"}.`,
+    heading, intro, items,
+    buttonLabel: "Открыть список сборов",
     link,
     footNote: "Напоминание включили вы сами в списке вещей — там же можно его выключить или перенести на другой срок.",
   });
 
-  const text = `Не забудьте: ${itemTitle}
+  const text = `${heading}
 
-Вы попросили напомнить ${whenLabel} до начала поездки «${tripTitle}». Загляните в список сборов:
+${intro}
+
+${items.map(i => `• ${i}`).join("\n")}
 
 ${link}
 
 Напоминание включили вы сами в списке вещей — там же можно его выключить.`;
 
-  return { subject: `Не забудьте: ${itemTitle} — ${tripTitle}`, html, text };
+  return { subject: `${heading} — ${tripTitle}`, html, text };
 }
 
 module.exports = { packingReminder };

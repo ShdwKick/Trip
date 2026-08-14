@@ -119,6 +119,10 @@ start("trip", TRIP_DIR, {
   DATA_DIR: path.join(WORK, "trip"),
   PORT: String(TRIP_PORT), HOST: "127.0.0.1",
   AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "trip",
+  // Включает напоминания на почту (см. README → «Напоминания на почту»):
+  // без него значок не рисуется вовсе. Локально письма всё равно уходят не
+  // дальше консоли — RESEND_API_KEY тут не задан, как и в остальном dev.mjs.
+  PUBLIC_URL: process.env.PUBLIC_URL || TRIP,
 }, "\x1b[36m");
 
 console.log(`

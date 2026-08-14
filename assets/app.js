@@ -592,12 +592,7 @@ function renderPacking() {
 
   $("packCount").textContent = packing.length ? `${packed} из ${packing.length}` : "";
   $("packCount").hidden = !packing.length;
-  $("packRemindHint").hidden = !state.reminders || !packing.length;
   box.textContent = "";
-
-  // Известна сразу из токена — без похода на сервер. Проверка тут только для
-  // подсказки: настоящую проверку всё равно делает сервер при записи.
-  const myEmail = auth.getUser()?.email || null;
 
   if (!packing.length) {
     box.append(Object.assign(el("p", "hint"),
@@ -659,61 +654,74 @@ function renderPacking() {
       if (data) { state.trip = data; renderTrip(); }
     };
 
-    row.append(check, title);
-
-    // Напоминание — тоже личное, как и «сложил»: включает и выбирает срок
-    // каждый себе. Без PUBLIC_URL на сервере фичи целиком нет — прятать её
-    // надёжнее, чем показывать то, что при нажатии всегда откажет.
-    if (state.reminders) {
-      const bell = el("button", "icon-btn xs pk-remind" + (item.remind ? " on" : ""));
-      bell.innerHTML = svg('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>', "icon sm");
-      bell.setAttribute("aria-pressed", String(!!item.remind));
-      if (item.remind) {
-        bell.title = "Напоминание включено — нажать, чтобы выключить";
-      } else if (!state.trip.trip.startsOn) {
-        bell.disabled = true;
-        bell.title = "Сначала укажите дату начала поездки — иначе не от чего отсчитывать срок";
-      } else if (!myEmail) {
-        bell.disabled = true;
-        bell.title = "Добавьте почту в кабинете BurningHouse — иначе письму некуда прийти";
-      } else {
-        bell.title = "Напомнить на почту";
-      }
-      bell.onclick = async () => {
-        const body = item.remind ? { enabled: false } : { offset: "1d" };
-        const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}/remind`, { method: "POST", body }));
-        if (data) { state.trip = data; renderTrip(); }
-      };
-      row.append(bell);
-    }
-
-    row.append(del);
+    row.append(check, title, del);
     box.append(row);
-
-    if (item.remind) {
-      const sub = el("div", "pack-remind");
-      // Подпись берём из того же списка, что и сервер отдал через /api/config
-      // — свой список меток на фронте означал бы синхронизировать два места.
-      const offsetLabel = state.remindOffsets.find(o => o.code === item.remind.offset)?.label || item.remind.offset;
-      const label = el("span", "hint",
-        (item.remind.sent ? "Уже отправили письмо: " : "Пришлём письмо ") + offsetLabel + " до поездки.");
-      const sel = el("select", "remind-sel");
-      sel.setAttribute("aria-label", `Срок напоминания для «${item.title}»`);
-      sel.innerHTML = state.remindOffsets.map(o =>
-        `<option value="${o.code}"${o.code === item.remind.offset ? " selected" : ""}>${esc(o.label)}</option>`).join("");
-      sel.onchange = async () => {
-        const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}/remind`,
-          { method: "POST", body: { offset: sel.value } }));
-        if (data) { state.trip = data; renderTrip(); }
-      };
-      sub.append(label, sel);
-      box.append(sub);
-    }
   }
+
+  renderPackingRemind();
 
   // Непустой список раскрываем сам — но только пока человек не решил иначе:
   // свернул однажды, и дальше панель его слушается, а не нас.
   if (packing.length && !panel.dataset.touched) panel.open = true;
+}
+
+/**
+ * Одно напоминание на весь список сборов, а не на вещь — за сборами идут все
+ * сразу, а не по одной, и ставить срок на каждую строку значило бы щёлкать по
+ * нему пять раз ради одной и той же даты. Личное, как и «сложил».
+ *
+ * Без PUBLIC_URL на сервере фичи целиком нет — прячем управление совсем,
+ * надёжнее, чем показывать то, что при нажатии всегда откажет.
+ */
+function renderPackingRemind() {
+  const box = $("packRemindAll");
+  box.hidden = !state.reminders;
+  if (!state.reminders) return;
+
+  const remind = state.trip.packingRemind;
+  const btn = $("packRemindBtn");
+  const sel = $("packRemindSel");
+
+  btn.classList.toggle("on", !!remind);
+  btn.setAttribute("aria-pressed", String(!!remind));
+  // Известна сразу из токена — без похода на сервер. Проверка тут только для
+  // подсказки: настоящую проверку всё равно делает сервер при записи.
+  const myEmail = auth.getUser()?.email || null;
+  if (remind) {
+    btn.disabled = false;
+    btn.title = "Напоминание включено — нажать, чтобы выключить";
+  } else if (!state.trip.trip.startsOn) {
+    btn.disabled = true;
+    btn.title = "Сначала укажите дату начала поездки — иначе не от чего отсчитывать срок";
+  } else if (!myEmail) {
+    btn.disabled = true;
+    btn.title = "Добавьте почту в кабинете BurningHouse — иначе письму некуда прийти";
+  } else {
+    btn.disabled = false;
+    btn.title = "Пришлём письмо со списком того, что вы ещё не собрали";
+  }
+
+  $("packRemindBtnText").textContent = !remind ? "Напомнить собраться"
+    : remind.sent ? "Уже отправили письмо"
+    : "Напомним " + (state.remindOffsets.find(o => o.code === remind.offset)?.label || remind.offset) + " до поездки";
+
+  btn.onclick = async () => {
+    const body = remind ? { enabled: false } : { offset: "1d" };
+    const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/remind`, { method: "POST", body }));
+    if (data) { state.trip = data; renderTrip(); }
+  };
+
+  sel.hidden = !remind;
+  if (remind) {
+    sel.setAttribute("aria-label", "Срок напоминания");
+    sel.innerHTML = state.remindOffsets.map(o =>
+      `<option value="${o.code}"${o.code === remind.offset ? " selected" : ""}>${esc(o.label)}</option>`).join("");
+    sel.onchange = async () => {
+      const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/remind`,
+        { method: "POST", body: { offset: sel.value } }));
+      if (data) { state.trip = data; renderTrip(); }
+    };
+  }
 }
 
 $("packPanel").addEventListener("toggle", () => { $("packPanel").dataset.touched = "1"; });

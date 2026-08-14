@@ -155,7 +155,15 @@
         <input type="text" id="packInput" placeholder="Паспорт, зарядка, аптечка…" maxlength="200" autocomplete="off">
         <button class="btn tonal" type="submit">Добавить</button>
       </form>
-      <p class="hint" id="packRemindHint" hidden>Значок ⏰ у вещи — пришлём письмо на вашу почту перед поездкой.</p>
+      <!-- Напоминание одно на весь список, не на вещь: письмо перечислит то, что
+           лично вы ещё не отметили «сложил», на момент отправки. -->
+      <div class="pack-remind-all" id="packRemindAll" hidden>
+        <button class="btn text" id="packRemindBtn" type="button">
+          <svg class="icon sm" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span id="packRemindBtnText">Напомнить собраться</span>
+        </button>
+        <select class="remind-sel" id="packRemindSel" hidden></select>
+      </div>
     </details>
 
     <div class="list-toolbar">

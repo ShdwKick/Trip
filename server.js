@@ -235,17 +235,19 @@ db.exec(`
     PRIMARY KEY (item_id, user_id)
   );
 
-  -- Напоминание на почту про конкретную вещь — тоже личное, как и «сложил»:
-  -- каждый решает сам, про что ему напомнить и за сколько. Срок отсчитывается
-  -- от даты начала поездки (trips.starts_on), поэтому без даты напоминание
-  -- поставить нельзя — сервер это проверяет при записи.
+  -- Напоминание на почту — одно на весь список сборов, не на каждую вещь: за
+  -- вещами всё равно идут в один и тот же список, и ставить срок по отдельной
+  -- строке значило бы щёлкать по нему пять раз ради одной и той же даты.
+  -- Личное, как и «сложил» — каждый решает сам, напоминать ли ему. Срок
+  -- отсчитывается от даты начала поездки (trips.starts_on), поэтому без даты
+  -- напоминание поставить нельзя — сервер это проверяет при записи.
   CREATE TABLE IF NOT EXISTS packing_reminders (
-    item_id     TEXT NOT NULL REFERENCES packing_items(id) ON DELETE CASCADE,
+    trip_id     TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
     user_id     TEXT NOT NULL,
     offset_code TEXT NOT NULL,   -- week | 3d | 1d | 3h | 1h — см. REMIND_OFFSETS
     created_at  INTEGER NOT NULL,
     sent_at     INTEGER,         -- NULL, пока не отправлено
-    PRIMARY KEY (item_id, user_id)
+    PRIMARY KEY (trip_id, user_id)
   );
 `);
 
@@ -344,27 +346,30 @@ const stmt = {
   packCheck:     db.prepare("INSERT INTO packing_checks (item_id,user_id,added_at) VALUES (?,?,?) ON CONFLICT DO NOTHING"),
   packUncheck:   db.prepare("DELETE FROM packing_checks WHERE item_id = ? AND user_id = ?"),
 
-  // Напоминания — тоже личные, тем же приёмом, что и отметки «сложил».
-  myReminders:   db.prepare(`SELECT r.item_id, r.offset_code, r.sent_at FROM packing_reminders r
-                               JOIN packing_items i ON i.id = r.item_id
-                              WHERE i.trip_id = ? AND r.user_id = ?`),
+  // Напоминание — одно на весь список сборов, на пользователя и поездку, тем
+  // же приёмом личности, что и отметки «сложил».
+  myReminder:    db.prepare("SELECT offset_code, sent_at FROM packing_reminders WHERE trip_id = ? AND user_id = ?"),
   // Смена срока (offset_code) обязана снять старую отметку «отправлено»:
   // иначе более ранний срок, поставленный ПОСЛЕ уже отправленного письма,
   // никогда не сработает — фоновая проверка видит только sent_at IS NULL.
-  setReminder:   db.prepare(`INSERT INTO packing_reminders (item_id,user_id,offset_code,created_at) VALUES (?,?,?,?)
-                              ON CONFLICT(item_id,user_id) DO UPDATE SET offset_code = excluded.offset_code, sent_at = NULL`),
-  dropReminder:  db.prepare("DELETE FROM packing_reminders WHERE item_id = ? AND user_id = ?"),
+  setReminder:   db.prepare(`INSERT INTO packing_reminders (trip_id,user_id,offset_code,created_at) VALUES (?,?,?,?)
+                              ON CONFLICT(trip_id,user_id) DO UPDATE SET offset_code = excluded.offset_code, sent_at = NULL`),
+  dropReminder:  db.prepare("DELETE FROM packing_reminders WHERE trip_id = ? AND user_id = ?"),
   // Всё, что пора отправить, — по всем поездкам сразу: фоновая проверка одна
   // на процесс, а не одна на поездку.
   dueReminders:  db.prepare(`
-    SELECT r.item_id, r.user_id, r.offset_code, i.title AS item_title, t.id AS trip_id,
-           t.title AS trip_title, t.starts_on, m.email
+    SELECT r.trip_id, r.user_id, r.offset_code, t.title AS trip_title, t.starts_on, m.email
       FROM packing_reminders r
-      JOIN packing_items i ON i.id = r.item_id
-      JOIN trips t ON t.id = i.trip_id
+      JOIN trips t ON t.id = r.trip_id
       JOIN trip_members m ON m.trip_id = t.id AND m.user_id = r.user_id
      WHERE r.sent_at IS NULL AND t.starts_on IS NOT NULL`),
-  markReminderSent: db.prepare("UPDATE packing_reminders SET sent_at = ? WHERE item_id = ? AND user_id = ?"),
+  // Что этот человек ещё не сложил — идёт в письмо отдельным списком, чтобы
+  // напоминание было конкретным, а не просто «что-то там у вас есть».
+  myUnpacked:    db.prepare(`SELECT i.title FROM packing_items i
+                              WHERE i.trip_id = ?
+                                AND i.id NOT IN (SELECT item_id FROM packing_checks WHERE user_id = ?)
+                              ORDER BY i.sort_order, i.created_at`),
+  markReminderSent: db.prepare("UPDATE packing_reminders SET sent_at = ? WHERE trip_id = ? AND user_id = ?"),
 
   settlements:  db.prepare("SELECT * FROM settlements WHERE trip_id = ? ORDER BY created_at"),
   settlement:   db.prepare("SELECT * FROM settlements WHERE id = ?"),
@@ -644,7 +649,7 @@ function tripPayload(trip, me) {
     itemUsers.get(u.item_id).push(u.user_id);
   }
   const packedByMe = new Set(stmt.myPacked.all(trip.id, me.user_id).map(r => r.item_id));
-  const remindByMe = new Map(stmt.myReminders.all(trip.id, me.user_id).map(r => [r.item_id, { offset: r.offset_code, sent: !!r.sent_at }]));
+  const myReminderRow = stmt.myReminder.get(trip.id, me.user_id);
   const itemsOf = new Map();
   for (const it of stmt.itemsOfTrip.all(trip.id)) {
     if (!itemsOf.has(it.place_id)) itemsOf.set(it.place_id, []);
@@ -683,8 +688,11 @@ function tripPayload(trip, me) {
     packing: stmt.packing.all(trip.id).map(i => ({
       id: i.id, title: i.title, note: i.note, sortOrder: i.sort_order,
       createdBy: i.created_by, packed: packedByMe.has(i.id),
-      remind: remindByMe.get(i.id) || null,
     })),
+    // Напоминание одно на весь список, не на вещь — письмо перечислит то, что
+    // ещё не собрано лично у вас на момент отправки, а не то, что было на
+    // момент, когда вы поставили галочку.
+    packingRemind: myReminderRow ? { offset: myReminderRow.offset_code, sent: !!myReminderRow.sent_at } : null,
     settlements: stmt.settlements.all(trip.id).map(s => ({
       id: s.id, fromUser: s.from_user, toUser: s.to_user, amount: s.amount,
       note: s.note, createdAt: s.created_at, confirmedAt: s.confirmed_at,
@@ -1092,6 +1100,25 @@ async function api(req, res, url, user) {
         stmt.touchTrip.run(ts, tripId);
         return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
       }
+      // Напоминание одно на весь список сборов, не на вещь — до общей ветки по
+      // id, иначе "remind" приняли бы за идентификатор вещи. Тоже только себе:
+      // требует и почту на аккаунте (некуда слать), и дату начала поездки (не
+      // от чего отсчитывать срок) — без них отбиваем понятной причиной, а не
+      // тихо игнорируем.
+      if (tail[1] === "remind" && m === "POST") {
+        if (!REMINDERS_ENABLED) return json(res, 400, { error: "disabled" });
+        const body = await readJson(req);
+        if (body.enabled === false) {
+          stmt.dropReminder.run(tripId, user.id);
+          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+        }
+        const offset = oneOf(body.offset, Object.keys(REMIND_OFFSETS));
+        if (!offset) return json(res, 400, { error: "bad offset" });
+        if (!user.email) return json(res, 400, { error: "no_email", message: "На аккаунте BurningHouse не указана почта — добавьте её в личном кабинете, иначе напоминанию некуда прийти." });
+        if (!ctx.trip.starts_on) return json(res, 400, { error: "no_date", message: "У поездки не указана дата начала — не от чего отсчитывать срок." });
+        stmt.setReminder.run(tripId, user.id, offset, now());
+        return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+      }
       if (tail[1]) {
         const item = stmt.packingItem.get(tail[1]);
         if (!item || item.trip_id !== tripId) return json(res, 404, { error: "not found" });
@@ -1101,23 +1128,6 @@ async function api(req, res, url, user) {
           const body = await readJson(req);
           if (body.packed === false) stmt.packUncheck.run(item.id, user.id);
           else stmt.packCheck.run(item.id, user.id, now());
-          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
-        }
-        // Напоминание — тоже только себе. Требует и почту на аккаунте (некуда
-        // слать), и дату начала поездки (не от чего отсчитывать срок) — без
-        // них отбиваем понятной причиной, а не тихо игнорируем.
-        if (tail[2] === "remind" && m === "POST") {
-          if (!REMINDERS_ENABLED) return json(res, 400, { error: "disabled" });
-          const body = await readJson(req);
-          if (body.enabled === false) {
-            stmt.dropReminder.run(item.id, user.id);
-            return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
-          }
-          const offset = oneOf(body.offset, Object.keys(REMIND_OFFSETS));
-          if (!offset) return json(res, 400, { error: "bad offset" });
-          if (!user.email) return json(res, 400, { error: "no_email", message: "На аккаунте BurningHouse не указана почта — добавьте её в личном кабинете, иначе напоминанию некуда прийти." });
-          if (!ctx.trip.starts_on) return json(res, 400, { error: "no_date", message: "У поездки не указана дата начала — не от чего отсчитывать срок." });
-          stmt.setReminder.run(item.id, user.id, offset, now());
           return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
         }
         if (m === "PATCH") {
@@ -1401,14 +1411,23 @@ function checkReminders() {
     const startMs = Date.parse(r.starts_on);
     if (!offsetMs || !Number.isFinite(startMs)) continue;   // офсет из старой версии кода или дата битая — пропускаем
     if (nowMs < startMs - offsetMs) continue;                // ещё не время
-    if (!r.email) continue;   // почту убрали с аккаунта уже после того, как поставили напоминание
-    const mail = mailTpl.packingReminder({
-      link: PUBLIC_URL + "/#/t/" + r.trip_id,
-      tripTitle: r.trip_title, itemTitle: r.item_title, whenLabel: REMIND_LABELS[r.offset_code],
-    });
-    mailer.send({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text });
-    stmt.markReminderSent.run(nowMs, r.item_id, r.user_id);
-    sent++;
+    // Отправку всё равно засчитываем ниже (метка «отправлено» ставится за
+    // пределами обеих проверок): повторять попытку каждые 5 минут ради того,
+    // у кого нет почты или кто уже всё собрал, незачем — случай не изменится
+    // сам по себе, а не отметить сейчас значило бы дёргать эти строки вечно.
+    if (r.email) {
+      const outstanding = stmt.myUnpacked.all(r.trip_id, r.user_id).map(i => i.title);
+      // Собрали всё — напоминать не о чем: тишина тут полезнее письма ни о чём.
+      if (outstanding.length) {
+        const mail = mailTpl.packingReminder({
+          link: PUBLIC_URL + "/#/t/" + r.trip_id,
+          tripTitle: r.trip_title, whenLabel: REMIND_LABELS[r.offset_code], items: outstanding,
+        });
+        mailer.send({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text });
+        sent++;
+      }
+    }
+    stmt.markReminderSent.run(nowMs, r.trip_id, r.user_id);
   }
   return sent;
 }
