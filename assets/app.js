@@ -164,6 +164,8 @@ async function init() {
   const cfg = await (await fetch("/api/config")).json();
   state.maxPhotoBytes = cfg.maxPhotoBytes || state.maxPhotoBytes;
   state.scanReceipt = !!cfg.scanReceipt;
+  state.reminders = !!cfg.reminders;
+  state.remindOffsets = Array.isArray(cfg.remindOffsets) ? cfg.remindOffsets : [];
   auth = createAuthClient({
     authBase: cfg.authBase,
     clientId: cfg.clientId,
@@ -590,7 +592,12 @@ function renderPacking() {
 
   $("packCount").textContent = packing.length ? `${packed} из ${packing.length}` : "";
   $("packCount").hidden = !packing.length;
+  $("packRemindHint").hidden = !state.reminders || !packing.length;
   box.textContent = "";
+
+  // Известна сразу из токена — без похода на сервер. Проверка тут только для
+  // подсказки: настоящую проверку всё равно делает сервер при записи.
+  const myEmail = auth.getUser()?.email || null;
 
   if (!packing.length) {
     box.append(Object.assign(el("p", "hint"),
@@ -652,8 +659,56 @@ function renderPacking() {
       if (data) { state.trip = data; renderTrip(); }
     };
 
-    row.append(check, title, del);   // распорка не нужна: поле само занимает всё между
+    row.append(check, title);
+
+    // Напоминание — тоже личное, как и «сложил»: включает и выбирает срок
+    // каждый себе. Без PUBLIC_URL на сервере фичи целиком нет — прятать её
+    // надёжнее, чем показывать то, что при нажатии всегда откажет.
+    if (state.reminders) {
+      const bell = el("button", "icon-btn xs pk-remind" + (item.remind ? " on" : ""));
+      bell.innerHTML = svg('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>', "icon sm");
+      bell.setAttribute("aria-pressed", String(!!item.remind));
+      if (item.remind) {
+        bell.title = "Напоминание включено — нажать, чтобы выключить";
+      } else if (!state.trip.trip.startsOn) {
+        bell.disabled = true;
+        bell.title = "Сначала укажите дату начала поездки — иначе не от чего отсчитывать срок";
+      } else if (!myEmail) {
+        bell.disabled = true;
+        bell.title = "Добавьте почту в кабинете BurningHouse — иначе письму некуда прийти";
+      } else {
+        bell.title = "Напомнить на почту";
+      }
+      bell.onclick = async () => {
+        const body = item.remind ? { enabled: false } : { offset: "1d" };
+        const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}/remind`, { method: "POST", body }));
+        if (data) { state.trip = data; renderTrip(); }
+      };
+      row.append(bell);
+    }
+
+    row.append(del);
     box.append(row);
+
+    if (item.remind) {
+      const sub = el("div", "pack-remind");
+      // Подпись берём из того же списка, что и сервер отдал через /api/config
+      // — свой список меток на фронте означал бы синхронизировать два места.
+      const offsetLabel = state.remindOffsets.find(o => o.code === item.remind.offset)?.label || item.remind.offset;
+      const label = el("span", "hint",
+        (item.remind.sent ? "Уже отправили письмо: " : "Пришлём письмо ") + offsetLabel + " до поездки.");
+      const sel = el("select", "remind-sel");
+      sel.setAttribute("aria-label", `Срок напоминания для «${item.title}»`);
+      sel.innerHTML = state.remindOffsets.map(o =>
+        `<option value="${o.code}"${o.code === item.remind.offset ? " selected" : ""}>${esc(o.label)}</option>`).join("");
+      sel.onchange = async () => {
+        const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}/remind`,
+          { method: "POST", body: { offset: sel.value } }));
+        if (data) { state.trip = data; renderTrip(); }
+      };
+      sub.append(label, sel);
+      box.append(sub);
+    }
   }
 
   // Непустой список раскрываем сам — но только пока человек не решил иначе:
@@ -1679,9 +1734,12 @@ function renderItems() {
 
     const check = el("button", "check sm" + (mine ? " on" : ""));
     check.type = "button";
-    check.title = mine ? "Это не моё" : "Это моё";
+    check.title = it.guest ? (mine ? "Это не моё — снять со всего блока гостя" : "Это моё — на весь блок гостя") : (mine ? "Это не моё" : "Это моё");
     check.innerHTML = svg('<polyline points="20 6 9 17 4 12"/>', "icon xs");
     check.onclick = async () => {
+      // Внутри блока гостя позиции всегда достаются одному кругу людей — «это
+      // моё» отмечает не только эту строку, а весь блок разом.
+      if (it.guest) { await setGuestUsers(it.guest, mine ? removeUser(it.users, state.me?.id) : addUser(it.users, state.me?.id)); return; }
       const data = await act(() => api(`/items/${it.id}/take`, { method: "POST" }));
       if (data) applyTripData(data);
     };
@@ -1776,12 +1834,7 @@ function assignGuest(guest) {
   $("cfOk").onclick = async () => {
     if (!chosen) return snack("Выберите человека");
     closeScrim("confirmScrim");
-    let data = null;
-    for (const it of items) {
-      data = await act(() => api("/items/" + it.id, { method: "PATCH", body: { users: [chosen] } }));
-      if (!data) return;
-    }
-    applyTripData(data);
+    await setGuestUsers(guest, [chosen]);
     snack("Позиции назначены");
   };
   openScrim("confirmScrim");
@@ -1807,14 +1860,30 @@ function openItemPeople(item) {
     row.append(check, el("span", "nm", who(m) + (m.userId === state.me?.id ? " (вы)" : "")));
     list.append(row);
   }
-  box.append(Object.assign(el("p", "hint"), { textContent: "Кто это заказывал. Никого не отметить — позиция разделится на всех." }), list);
+  box.append(Object.assign(el("p", "hint"), {
+    textContent: item.guest
+      ? "Кто это заказывал — относится ко всему блоку гостя, не только к этой строке. Никого не отметить — блок разделится на всех."
+      : "Кто это заказывал. Никого не отметить — позиция разделится на всех.",
+  }), list);
   $("cfOk").textContent = "Сохранить";
   $("cfOk").onclick = async () => {
     closeScrim("confirmScrim");
+    // Блок гостя — общий круг людей на все его строки; вне блока правим только
+    // одну позицию.
+    if (item.guest) { await setGuestUsers(item.guest, [...chosen]); return; }
     const data = await act(() => api("/items/" + item.id, { method: "PATCH", body: { users: [...chosen] } }));
     if (data) applyTripData(data);
   };
   openScrim("confirmScrim");
+}
+
+const addUser = (users, id) => (id ? [...new Set([...(users || []), id])] : (users || []));
+const removeUser = (users, id) => (users || []).filter(u => u !== id);
+
+/** Записать общий список людей сразу на все позиции блока гостя, одним запросом. */
+async function setGuestUsers(guest, users) {
+  const data = await act(() => api(`/places/${editingPlace.id}/items/guest`, { method: "PATCH", body: { guest, users } }));
+  if (data) applyTripData(data);
 }
 
 /** Сколько по позициям приходится на человека. */

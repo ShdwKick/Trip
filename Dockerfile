@@ -18,10 +18,10 @@ COPY assets/ ./assets/
 # сервере. Запускать сервер нельзя — он бы занял порт и повис, поэтому только
 # наличие файлов и разбор синтаксиса.
 RUN set -e; \
-    for f in server.js auth-client.js admin-internal.js gigachat.js index.html; do \
+    for f in server.js auth-client.js admin-internal.js gigachat.js mailer.js emailTemplates.js index.html; do \
       test -f "$f" || { echo "В образе нет $f — проверьте COPY в Dockerfile"; exit 1; }; \
     done; \
-    for f in server.js auth-client.js admin-internal.js gigachat.js; do node --check "$f"; done
+    for f in server.js auth-client.js admin-internal.js gigachat.js mailer.js emailTemplates.js; do node --check "$f"; done
 
 # Каталог данных: store.db и фотографии. В контейнере он смонтирован томом —
 # см. docker-compose.yml.

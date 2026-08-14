@@ -28,6 +28,10 @@
  *                  (maps.app.goo.gl и т.п.). Хождение в сеть строго по списку хостов.
  *   ALLOWED_ORIGIN — источник, которому разрешён доступ к /api/* (CORS). Нужен, только
  *                  если фронтенд отдаётся отдельно от этого сервера (сейчас не так).
+ *   PUBLIC_URL     — свой адрес сервиса, напр. https://trip.burninghouse.ru. Без него
+ *                  напоминания на почту выключены целиком: письму некуда вести ссылкой.
+ *   RESEND_API_KEY, MAIL_FROM — отправка почты, см. mailer.js. Без ключа письма
+ *                  просто печатаются в консоль вместо отправки (как и в Auth).
  */
 "use strict";
 
@@ -37,6 +41,8 @@ const path = require("path");
 const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
+const mailer = require("./mailer");
+const mailTpl = require("./emailTemplates");
 
 const PORT = parseInt(process.env.PORT || "8790", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -54,6 +60,19 @@ const RESOLVE_SHORT_LINKS = process.env.RESOLVE_SHORT_LINKS !== "0";
 const GIGACHAT_AUTH_KEY = process.env.GIGACHAT_AUTH_KEY || "";
 const GIGACHAT_SCOPE = process.env.GIGACHAT_SCOPE || "GIGACHAT_API_PERS";
 const GIGACHAT_MODEL = process.env.GIGACHAT_MODEL || "GigaChat-2-Pro";
+
+// Напоминания на почту про сборы. PUBLIC_URL — свой адрес сервиса (нужен, чтобы
+// собрать в письме ссылку на поездку: сервер её не знает, в отличие от фронта,
+// который берёт location.origin). Без него собрать рабочую ссылку не из чего,
+// поэтому вся возможность выключена целиком, как и распознавание чека без ключа.
+const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
+const REMINDERS_ENABLED = !!PUBLIC_URL;
+const REMIND_OFFSETS = { week: 7 * 86400e3, "3d": 3 * 86400e3, "1d": 86400e3, "3h": 3 * 3600e3, "1h": 3600e3 };
+const REMIND_LABELS = { week: "за неделю", "3d": "за 3 дня", "1d": "за день", "3h": "за 3 часа", "1h": "за час" };
+const REMIND_CHECK_MS = 5 * 60 * 1000;
+// Настраиваемо ради тестов: e2e дёргает проверку сама через /internal/reminders/check
+// и хочет знать точно, сколько писем ушло именно от её вызова — не долю секунды раньше.
+const REMIND_INITIAL_DELAY_MS = parseInt(process.env.REMIND_INITIAL_DELAY_MS || "5000", 10);
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "trip";
@@ -215,6 +234,19 @@ db.exec(`
     added_at INTEGER NOT NULL,
     PRIMARY KEY (item_id, user_id)
   );
+
+  -- Напоминание на почту про конкретную вещь — тоже личное, как и «сложил»:
+  -- каждый решает сам, про что ему напомнить и за сколько. Срок отсчитывается
+  -- от даты начала поездки (trips.starts_on), поэтому без даты напоминание
+  -- поставить нельзя — сервер это проверяет при записи.
+  CREATE TABLE IF NOT EXISTS packing_reminders (
+    item_id     TEXT NOT NULL REFERENCES packing_items(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
+    offset_code TEXT NOT NULL,   -- week | 3d | 1d | 3h | 1h — см. REMIND_OFFSETS
+    created_at  INTEGER NOT NULL,
+    sent_at     INTEGER,         -- NULL, пока не отправлено
+    PRIMARY KEY (item_id, user_id)
+  );
 `);
 
 // Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
@@ -222,6 +254,11 @@ db.exec(`
 for (const sql of [
   "ALTER TABLE trip_members ADD COLUMN name TEXT",         // необязательное имя из auth
   "ALTER TABLE trip_members ADD COLUMN phone TEXT",        // номер для перевода, если разрешён
+  // Почта — только чтобы прислать НАПОМИНАНИЕ САМОМУ ВЛАДЕЛЬЦУ. Другим
+  // участникам не показывается нигде (в отличие от phone, у неё нет своей
+  // ручки согласия — она приходит в токене всегда, если вообще есть на
+  // аккаунте), поэтому и в tripPayload её нет: раскрывать лишнее незачем.
+  "ALTER TABLE trip_members ADD COLUMN email TEXT",
   "ALTER TABLE places ADD COLUMN paid_by TEXT",            // кто заплатил по счёту
   "ALTER TABLE places ADD COLUMN split TEXT NOT NULL DEFAULT 'equal'",  // equal | custom
   "ALTER TABLE place_items ADD COLUMN guest TEXT",         // «Гость 1» из чека, если он так разбит
@@ -259,7 +296,7 @@ const stmt = {
 
   member:      db.prepare("SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?"),
   members:     db.prepare("SELECT user_id, username, name, phone, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
-  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,name,phone,role,joined_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name, phone = excluded.phone"),
+  addMember:   db.prepare("INSERT INTO trip_members (trip_id,user_id,username,name,phone,email,role,joined_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(trip_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name, phone = excluded.phone, email = excluded.email"),
   dropMember:  db.prepare("DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?"),
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM trip_members WHERE trip_id = ? AND role = 'owner'"),
 
@@ -306,6 +343,28 @@ const stmt = {
                               WHERE i.trip_id = ? AND c.user_id = ?`),
   packCheck:     db.prepare("INSERT INTO packing_checks (item_id,user_id,added_at) VALUES (?,?,?) ON CONFLICT DO NOTHING"),
   packUncheck:   db.prepare("DELETE FROM packing_checks WHERE item_id = ? AND user_id = ?"),
+
+  // Напоминания — тоже личные, тем же приёмом, что и отметки «сложил».
+  myReminders:   db.prepare(`SELECT r.item_id, r.offset_code, r.sent_at FROM packing_reminders r
+                               JOIN packing_items i ON i.id = r.item_id
+                              WHERE i.trip_id = ? AND r.user_id = ?`),
+  // Смена срока (offset_code) обязана снять старую отметку «отправлено»:
+  // иначе более ранний срок, поставленный ПОСЛЕ уже отправленного письма,
+  // никогда не сработает — фоновая проверка видит только sent_at IS NULL.
+  setReminder:   db.prepare(`INSERT INTO packing_reminders (item_id,user_id,offset_code,created_at) VALUES (?,?,?,?)
+                              ON CONFLICT(item_id,user_id) DO UPDATE SET offset_code = excluded.offset_code, sent_at = NULL`),
+  dropReminder:  db.prepare("DELETE FROM packing_reminders WHERE item_id = ? AND user_id = ?"),
+  // Всё, что пора отправить, — по всем поездкам сразу: фоновая проверка одна
+  // на процесс, а не одна на поездку.
+  dueReminders:  db.prepare(`
+    SELECT r.item_id, r.user_id, r.offset_code, i.title AS item_title, t.id AS trip_id,
+           t.title AS trip_title, t.starts_on, m.email
+      FROM packing_reminders r
+      JOIN packing_items i ON i.id = r.item_id
+      JOIN trips t ON t.id = i.trip_id
+      JOIN trip_members m ON m.trip_id = t.id AND m.user_id = r.user_id
+     WHERE r.sent_at IS NULL AND t.starts_on IS NOT NULL`),
+  markReminderSent: db.prepare("UPDATE packing_reminders SET sent_at = ? WHERE item_id = ? AND user_id = ?"),
 
   settlements:  db.prepare("SELECT * FROM settlements WHERE trip_id = ? ORDER BY created_at"),
   settlement:   db.prepare("SELECT * FROM settlements WHERE id = ?"),
@@ -553,11 +612,13 @@ function access(tripId, user) {
   // выключил показ — копия обязана исчезнуть, а не остаться навсегда.
   if ((user.username && member.username !== user.username)
       || (user.name || null) !== (member.name || null)
-      || (user.phone || null) !== (member.phone || null)) {
-    stmt.addMember.run(tripId, user.id, user.username, user.name || null, user.phone || null, member.role, member.joined_at);
+      || (user.phone || null) !== (member.phone || null)
+      || (user.email || null) !== (member.email || null)) {
+    stmt.addMember.run(tripId, user.id, user.username, user.name || null, user.phone || null, user.email || null, member.role, member.joined_at);
     member.username = user.username;
     member.name = user.name || null;
     member.phone = user.phone || null;
+    member.email = user.email || null;
   }
   return { trip, member, isOwner: member.role === "owner" };
 }
@@ -583,6 +644,7 @@ function tripPayload(trip, me) {
     itemUsers.get(u.item_id).push(u.user_id);
   }
   const packedByMe = new Set(stmt.myPacked.all(trip.id, me.user_id).map(r => r.item_id));
+  const remindByMe = new Map(stmt.myReminders.all(trip.id, me.user_id).map(r => [r.item_id, { offset: r.offset_code, sent: !!r.sent_at }]));
   const itemsOf = new Map();
   for (const it of stmt.itemsOfTrip.all(trip.id)) {
     if (!itemsOf.has(it.place_id)) itemsOf.set(it.place_id, []);
@@ -621,6 +683,7 @@ function tripPayload(trip, me) {
     packing: stmt.packing.all(trip.id).map(i => ({
       id: i.id, title: i.title, note: i.note, sortOrder: i.sort_order,
       createdBy: i.created_by, packed: packedByMe.has(i.id),
+      remind: remindByMe.get(i.id) || null,
     })),
     settlements: stmt.settlements.all(trip.id).map(s => ({
       id: s.id, fromUser: s.from_user, toUser: s.to_user, amount: s.amount,
@@ -777,6 +840,13 @@ const server = http.createServer(async (req, res) => {
         placesCreated7d: db.prepare("SELECT COUNT(*) AS n FROM places WHERE created_at > ?").get(since7d).n,
       });
     }
+    // Ручной прогон проверки напоминаний — не только для тестов: если процесс
+    // долго живёт и по какой-то причине пропустил тики интервала, этим можно
+    // подтолкнуть его руками, не перезапуская сервис.
+    if (p === "/internal/reminders/check" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, { ok: true, sent: checkReminders() });
+    }
     if (p === "/internal/logs" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const since = url.searchParams.get("since");
@@ -813,6 +883,10 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/config") return json(res, 200, {
       authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID, maxPhotoBytes: MAX_PHOTO_BYTES,
       scanReceipt: giga.enabled,   // без ключа кнопку съёмки не показываем вовсе
+      // Без PUBLIC_URL письмо не собрать (ссылка внутри вести будет некуда),
+      // поэтому саму галочку «напомнить» тогда не показываем вовсе.
+      reminders: REMINDERS_ENABLED,
+      remindOffsets: Object.keys(REMIND_OFFSETS).map(code => ({ code, label: REMIND_LABELS[code] })),
     });
 
     if (p.startsWith("/api/")) {
@@ -870,7 +944,7 @@ async function api(req, res, url, user) {
         newJoinCode(),
         user.id, ts, ts,
       );
-      stmt.addMember.run(id, user.id, user.username || null, user.name || null, user.phone || null, "owner", ts);
+      stmt.addMember.run(id, user.id, user.username || null, user.name || null, user.phone || null, user.email || null, "owner", ts);
       // Ответ собираем от лица создателя целиком, а не одной ролью: в нём есть
       // и то, что зависит от «кого именно» — например личные отметки в списке вещей.
       return json(res, 200, tripPayload(stmt.trip.get(id), stmt.member.get(id, user.id)));
@@ -895,7 +969,7 @@ async function api(req, res, url, user) {
       });
     }
     if (m === "POST") {
-      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, user.name || null, user.phone || null, "member", now());
+      if (!already) stmt.addMember.run(trip.id, user.id, user.username || null, user.name || null, user.phone || null, user.email || null, "member", now());
       return json(res, 200, { tripId: trip.id, joined: !already });
     }
     return json(res, 405, { error: "method not allowed" });
@@ -965,7 +1039,7 @@ async function api(req, res, url, user) {
         if (!role) return json(res, 400, { error: "bad role" });
         const target = stmt.member.get(tripId, tail[1]);
         if (!target) return json(res, 404, { error: "no such member" });
-        stmt.addMember.run(tripId, target.user_id, target.username, target.name || null, target.phone || null, role, target.joined_at);
+        stmt.addMember.run(tripId, target.user_id, target.username, target.name || null, target.phone || null, target.email || null, role, target.joined_at);
         return json(res, 200, { ok: true });
       }
       return json(res, 405, { error: "method not allowed" });
@@ -1027,6 +1101,23 @@ async function api(req, res, url, user) {
           const body = await readJson(req);
           if (body.packed === false) stmt.packUncheck.run(item.id, user.id);
           else stmt.packCheck.run(item.id, user.id, now());
+          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+        }
+        // Напоминание — тоже только себе. Требует и почту на аккаунте (некуда
+        // слать), и дату начала поездки (не от чего отсчитывать срок) — без
+        // них отбиваем понятной причиной, а не тихо игнорируем.
+        if (tail[2] === "remind" && m === "POST") {
+          if (!REMINDERS_ENABLED) return json(res, 400, { error: "disabled" });
+          const body = await readJson(req);
+          if (body.enabled === false) {
+            stmt.dropReminder.run(item.id, user.id);
+            return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+          }
+          const offset = oneOf(body.offset, Object.keys(REMIND_OFFSETS));
+          if (!offset) return json(res, 400, { error: "bad offset" });
+          if (!user.email) return json(res, 400, { error: "no_email", message: "На аккаунте BurningHouse не указана почта — добавьте её в личном кабинете, иначе напоминанию некуда прийти." });
+          if (!ctx.trip.starts_on) return json(res, 400, { error: "no_date", message: "У поездки не указана дата начала — не от чего отсчитывать срок." });
+          stmt.setReminder.run(item.id, user.id, offset, now());
           return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
         }
         if (m === "PATCH") {
@@ -1151,6 +1242,25 @@ async function api(req, res, url, user) {
       stmt.touchTrip.run(ts, ctx.trip.id);
       return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
     }
+    // Блок гостя из чека — это одна раздача позиций одному кругу людей:
+    // «Гость 1» на чеке значит именно то, что все его строки заказал один и
+    // тот же человек (или два человека, если делили). Поэтому у позиций
+    // одного guest список users всегда общий, и назначать его удобнее одним
+    // действием, а не по позиции — независимо от того, чем это назначение
+    // сделано: галочкой «моё», списком людей или отдельной кнопкой «Это чьё-то».
+    // Пишем атомарно одним запросом, а не циклом PATCH: посреди цикла разница
+    // между «уже отправил половину» и «ничего не отправил» пользователю не видна.
+    if (tail[0] === "items" && tail[1] === "guest" && m === "PATCH") {
+      const body = await readJson(req);
+      const guest = str(body.guest, 40);
+      if (!guest) return json(res, 400, { error: "no guest" });
+      const targets = stmt.itemsOfPlace.all(place.id).filter(i => i.guest === guest);
+      if (!targets.length) return json(res, 404, { error: "no such guest" });
+      for (const it of targets) writeItemUsers(it.id, ctx.trip.id, body.users);
+      syncCostFromItems(place.id);   // сумма позиций не меняется, но так же делает соседний PATCH /items/:id
+      stmt.touchTrip.run(now(), ctx.trip.id);
+      return json(res, 200, tripPayload(stmt.trip.get(ctx.trip.id), ctx.member));
+    }
     return json(res, 404, { error: "not found" });
   }
 
@@ -1270,6 +1380,41 @@ async function uploadPhoto(req, res, ctx, user, placeId, url) {
 function dropPhotoFile(ph) {
   if (!ph) return;
   try { fs.unlinkSync(path.join(PHOTO_DIR, ph.file)); } catch { /* уже нет — и хорошо */ }
+}
+
+/**
+ * Проверка напоминаний. Срок отсчитывается от полуночи даты начала поездки:
+ * `starts_on` — это только дата («YYYY-MM-DD»), а `Date.parse` для такой
+ * строки по спецификации даёт полночь UTC, одинаково на любом сервере —
+ * не спорит с часовым поясом хоста и ничего не привязывает к нему.
+ *
+ * Своего расписания (cron, очередь) не заводим: сервис один процесс, значений
+ * — десятки, простого интервала достаточно, а с очередью появился бы ещё один
+ * компонент, который может не подняться.
+ */
+function checkReminders() {
+  if (!REMINDERS_ENABLED) return 0;
+  const nowMs = now();
+  let sent = 0;
+  for (const r of stmt.dueReminders.all()) {
+    const offsetMs = REMIND_OFFSETS[r.offset_code];
+    const startMs = Date.parse(r.starts_on);
+    if (!offsetMs || !Number.isFinite(startMs)) continue;   // офсет из старой версии кода или дата битая — пропускаем
+    if (nowMs < startMs - offsetMs) continue;                // ещё не время
+    if (!r.email) continue;   // почту убрали с аккаунта уже после того, как поставили напоминание
+    const mail = mailTpl.packingReminder({
+      link: PUBLIC_URL + "/#/t/" + r.trip_id,
+      tripTitle: r.trip_title, itemTitle: r.item_title, whenLabel: REMIND_LABELS[r.offset_code],
+    });
+    mailer.send({ to: r.email, subject: mail.subject, html: mail.html, text: mail.text });
+    stmt.markReminderSent.run(nowMs, r.item_id, r.user_id);
+    sent++;
+  }
+  return sent;
+}
+if (REMINDERS_ENABLED) {
+  setTimeout(checkReminders, REMIND_INITIAL_DELAY_MS).unref();   // догнать просроченное вскоре после старта, не дожидаясь первого интервала
+  setInterval(checkReminders, REMIND_CHECK_MS).unref();
 }
 
 server.listen(PORT, HOST, () => {

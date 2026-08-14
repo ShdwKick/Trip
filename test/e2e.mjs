@@ -55,8 +55,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const authEnv = { ...process.env, DATA_DIR: WORK + "/auth" };
 const authCli = (...a) => execFileSync("node", [...NODE_ARGS, "server.js", ...a], { cwd: AUTH_DIR, env: authEnv, encoding: "utf8" });
 authCli("client-add", "trip", "Куда поедем?", TRIP + "/");
-authCli("adduser", "danil", "ПарольДляТеста-2026");
-authCli("adduser", "sputnik", "ПарольПопутчика-2026");
+authCli("adduser", "danil", "ПарольДляТеста-2026", "danil@example.com");
+authCli("adduser", "sputnik", "ПарольПопутчика-2026");   // без почты — пригодится проверить отказ без неё
 
 /* ---------- 2. Запуск сервисов ---------- */
 const procs = [];
@@ -68,10 +68,14 @@ function start(name, cwd, env) {
   procs.push({ name, p, log });
 }
 start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1" });
+const ADMIN_KEY = "e2e-test-admin-key";
 start("trip", TRIP_DIR, {
   ...process.env, DATA_DIR: WORK + "/trip", PORT: String(TRIP_PORT), HOST: "127.0.0.1",
   AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "trip",
   RESOLVE_SHORT_LINKS: "0",   // в тесте наружу не ходим
+  PUBLIC_URL: TRIP,           // включает напоминания; RESEND_API_KEY нет — письмо уйдёт в консоль, не наружу
+  ADMIN_INTERNAL_KEY: ADMIN_KEY,
+  REMIND_INITIAL_DELAY_MS: "999999999",   // проверку сроков дёргаем сами — автотаймер не должен вмешаться
 });
 
 async function waitUp(url) {
@@ -341,6 +345,35 @@ r = await asJson(me.access_token, `/items/${tea.id}`, { method: "PATCH", body: {
 dish = r.body.places.find(p => p.id === check.id);
 ok("посторонний в позицию не попадает", dish.items.find(i => i.id === tea.id).users.length === 0);
 
+/* ---------- 10.76. Позиции чека — блок гостя ---------- */
+// Блок гостя — общий круг людей на все его строки: назначили одному —
+// назначили всем позициям блока разом, одним запросом, а не по одной.
+r = await asJson(me.access_token, `/places/${check.id}/items`, {
+  method: "POST",
+  body: {
+    items: [
+      { title: "Пряники", amount: 300, guest: "Гость 1" },
+      { title: "Чай", amount: 150, guest: "Гость 1" },
+      { title: "Кофе", amount: 250, guest: "Гость 2" },
+    ],
+  },
+});
+dish = r.body.places.find(p => p.id === check.id);
+const g1 = dish.items.filter(i => i.guest === "Гость 1");
+ok("позиции гостя добавлены с меткой", g1.length === 2 && dish.items.filter(i => i.guest === "Гость 2").length === 1, JSON.stringify(dish.items));
+
+r = await asJson(me.access_token, `/places/${check.id}/items/guest`, { method: "PATCH", body: { guest: "Гость 1", users: [myId] } });
+dish = r.body.places.find(p => p.id === check.id);
+ok("ОДНИМ ЗАПРОСОМ НАЗНАЧЕНЫ ОБЕ ПОЗИЦИИ ГОСТЯ", dish.items.filter(i => i.guest === "Гость 1").every(i => i.users.length === 1 && i.users[0] === myId), JSON.stringify(dish.items));
+ok("другой гость не затронут", dish.items.find(i => i.guest === "Гость 2").users.length === 0);
+
+r = await asJson(me.access_token, `/places/${check.id}/items/guest`, { method: "PATCH", body: { guest: "Гость 1", users: [] } });
+dish = r.body.places.find(p => p.id === check.id);
+ok("список людей можно снова опустошить — снимается со всего блока", dish.items.filter(i => i.guest === "Гость 1").every(i => i.users.length === 0));
+
+ok("несуществующий гость отбит", (await asJson(me.access_token, `/places/${check.id}/items/guest`, { method: "PATCH", body: { guest: "Нет такого", users: [myId] } })).status === 404);
+ok("пустое имя гостя отбито", (await asJson(me.access_token, `/places/${check.id}/items/guest`, { method: "PATCH", body: { guest: "", users: [myId] } })).status === 400);
+
 for (const it of dish.items) await asJson(me.access_token, "/items/" + it.id, { method: "DELETE" });
 r = await asJson(me.access_token, "/trips/" + tripId);
 dish = r.body.places.find(p => p.id === check.id);
@@ -418,7 +451,68 @@ r = await asJson(friend.access_token, `/trips/${tripId}/packing/${thing.id}`, { 
 ok("вещь убрана", r.status === 200 && r.body.packing.length === 0);
 ok("чужой вещи в другой поездке нет", (await asJson(me.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: {} })).status === 404);
 
-/* ---------- 13. Выход и удаление ---------- */
+/* ---------- 13. Напоминания на почту ---------- */
+// danil@example.com указан при заведении аккаунта, у sputnik почты нет —
+// этим и пользуемся, чтобы проверить отказ без неё.
+const cfg2 = await (await fetch(TRIP + "/api/config")).json();
+ok("конфиг сообщает о включённых напоминаниях", cfg2.reminders === true && cfg2.remindOffsets?.length === 5, JSON.stringify(cfg2));
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing`, { method: "POST", body: { title: "Аптечка" } });
+const pill = r.body.packing.find(i => i.title === "Аптечка");
+ok("новая вещь без напоминания", pill.remind === null);
+
+r = await asJson(friend.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "1d" } });
+ok("БЕЗ ПОЧТЫ НАПОМИНАНИЕ НЕ СТАВИТСЯ", r.status === 400 && r.body.error === "no_email", JSON.stringify(r.body));
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "не число" } });
+ok("неизвестный срок отбит", r.status === 400 && r.body.error === "bad offset");
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "3d" } });
+ok("напоминание поставлено", r.status === 200 && r.body.packing.find(i => i.id === pill.id)?.remind?.offset === "3d", JSON.stringify(r.body));
+
+r = await asJson(friend.access_token, "/trips/" + tripId);
+ok("ЧУЖОЕ НАПОМИНАНИЕ НЕ ВИДНО", r.body.packing.find(i => i.id === pill.id)?.remind === null);
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { offset: "1h" } });
+const afterChange = r.body.packing.find(i => i.id === pill.id)?.remind;
+ok("срок можно поменять, метка «отправлено» сбрасывается", afterChange?.offset === "1h" && afterChange?.sent === false);
+
+// Поездка «Грузия на майские» начинается 2026-05-01 — раньше сегодняшней даты
+// (сейчас 2026-08-14), поэтому любой срок для неё уже наступил. Заведём вторую
+// поездку далеко в будущем — на ней ничего наступить не должно.
+r = await asJson(me.access_token, "/trips", { method: "POST", body: { title: "Далёкая поездка", startsOn: "2030-01-01" } });
+const futureTrip = r.body.trip.id;
+r = await asJson(me.access_token, `/trips/${futureTrip}/packing`, { method: "POST", body: { title: "Компас" } });
+const futureItem = r.body.packing[0];
+await asJson(me.access_token, `/trips/${futureTrip}/packing/${futureItem.id}/remind`, { method: "POST", body: { offset: "1h" } });
+
+r = await fetch(TRIP + "/internal/reminders/check", { method: "POST", headers: { "x-admin-key": ADMIN_KEY } });
+const checkResult = await r.json();
+ok("ручной прогон сработал", r.status === 200 && checkResult.ok === true, JSON.stringify(checkResult));
+ok("отправлено ровно одно письмо — только просроченное", checkResult.sent === 1, JSON.stringify(checkResult));
+
+r = await asJson(me.access_token, "/trips/" + tripId);
+ok("просроченное отмечено отправленным", r.body.packing.find(i => i.id === pill.id)?.remind?.sent === true);
+r = await asJson(me.access_token, "/trips/" + futureTrip);
+ok("будущее — ещё не отправлено", r.body.packing.find(i => i.id === futureItem.id)?.remind?.sent === false);
+
+r = await fetch(TRIP + "/internal/reminders/check", { method: "POST", headers: { "x-admin-key": ADMIN_KEY } });
+ok("повторный прогон не шлёт то же письмо снова", (await r.json()).sent === 0);
+ok("без ключа прогон запретят", (await fetch(TRIP + "/internal/reminders/check", { method: "POST" })).status === 403);
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${pill.id}/remind`, { method: "POST", body: { enabled: false } });
+ok("напоминание выключено", r.body.packing.find(i => i.id === pill.id)?.remind === null);
+ok("тестовую поездку из будущего убрали", (await asJson(me.access_token, "/trips/" + futureTrip, { method: "DELETE" })).status === 200);
+
+r = await asJson(me.access_token, "/trips", { method: "POST", body: { title: "Без даты" } });
+const noDateTrip = r.body.trip.id;
+r = await asJson(me.access_token, `/trips/${noDateTrip}/packing`, { method: "POST", body: { title: "Гид" } });
+const noDateItem = r.body.packing[0];
+r = await asJson(me.access_token, `/trips/${noDateTrip}/packing/${noDateItem.id}/remind`, { method: "POST", body: { offset: "1d" } });
+ok("БЕЗ ДАТЫ НАЧАЛА НАПОМИНАНИЕ НЕ СТАВИТСЯ", r.status === 400 && r.body.error === "no_date", JSON.stringify(r.body));
+ok("тестовую поездку без даты убрали", (await asJson(me.access_token, "/trips/" + noDateTrip, { method: "DELETE" })).status === 200);
+
+/* ---------- 14. Выход и удаление ---------- */
 r = await asJson(me.access_token, `/trips/${tripId}/leave`, { method: "POST" });
 ok("единственный владелец не может выйти", r.status === 409);
 r = await asJson(friend.access_token, `/trips/${tripId}/leave`, { method: "POST" });
