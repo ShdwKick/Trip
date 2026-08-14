@@ -192,6 +192,29 @@ db.exec(`
     confirmed_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_settlements_trip ON settlements(trip_id);
+
+  -- Что взять с собой. Список общий на поездку — договорились один раз, что
+  -- нужны переходник и аптечка, — а вот галочки у каждого свои: паспорт
+  -- собирает себе каждый, и «Маша отметила паспорт» ничего не говорит о вашем.
+  -- Этим список вещей и отличается от списка мест, где отметка общая.
+  CREATE TABLE IF NOT EXISTS packing_items (
+    id         TEXT PRIMARY KEY,
+    trip_id    TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL,
+    note       TEXT,
+    sort_order REAL NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_packing_trip ON packing_items(trip_id);
+
+  -- Отметка «сложил» — своя у каждого. Нет строки — не сложил.
+  CREATE TABLE IF NOT EXISTS packing_checks (
+    item_id  TEXT NOT NULL REFERENCES packing_items(id) ON DELETE CASCADE,
+    user_id  TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (item_id, user_id)
+  );
 `);
 
 // Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
@@ -270,6 +293,19 @@ const stmt = {
   addItemUser:  db.prepare("INSERT INTO place_item_users (item_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING"),
   dropItemUser: db.prepare("DELETE FROM place_item_users WHERE item_id = ? AND user_id = ?"),
   sumItems:     db.prepare("SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS n FROM place_items WHERE place_id = ?"),
+
+  packing:       db.prepare("SELECT * FROM packing_items WHERE trip_id = ? ORDER BY sort_order, created_at"),
+  packingItem:   db.prepare("SELECT * FROM packing_items WHERE id = ?"),
+  insertPacking: db.prepare("INSERT INTO packing_items (id,trip_id,title,note,sort_order,created_by,created_at) VALUES (?,?,?,?,?,?,?)"),
+  deletePacking: db.prepare("DELETE FROM packing_items WHERE id = ?"),
+  maxPackOrder:  db.prepare("SELECT COALESCE(MAX(sort_order), 0) AS m FROM packing_items WHERE trip_id = ?"),
+  // Только свои отметки: чужие в ответ не попадают вовсе, а не отбрасываются на
+  // клиенте — их там просто нечем показать.
+  myPacked:      db.prepare(`SELECT c.item_id FROM packing_checks c
+                               JOIN packing_items i ON i.id = c.item_id
+                              WHERE i.trip_id = ? AND c.user_id = ?`),
+  packCheck:     db.prepare("INSERT INTO packing_checks (item_id,user_id,added_at) VALUES (?,?,?) ON CONFLICT DO NOTHING"),
+  packUncheck:   db.prepare("DELETE FROM packing_checks WHERE item_id = ? AND user_id = ?"),
 
   settlements:  db.prepare("SELECT * FROM settlements WHERE trip_id = ? ORDER BY created_at"),
   settlement:   db.prepare("SELECT * FROM settlements WHERE id = ?"),
@@ -546,6 +582,7 @@ function tripPayload(trip, me) {
     if (!itemUsers.has(u.item_id)) itemUsers.set(u.item_id, []);
     itemUsers.get(u.item_id).push(u.user_id);
   }
+  const packedByMe = new Set(stmt.myPacked.all(trip.id, me.user_id).map(r => r.item_id));
   const itemsOf = new Map();
   for (const it of stmt.itemsOfTrip.all(trip.id)) {
     if (!itemsOf.has(it.place_id)) itemsOf.set(it.place_id, []);
@@ -579,6 +616,12 @@ function tripPayload(trip, me) {
       photos: byPlace.get(p.id) || [],
     })),
     tripPhotos: byPlace.get("") || [],
+    // Список вещей общий, отметка «сложил» — только ваша. Чужие сюда не
+    // попадают: договорились, что каждый собирает свой рюкзак сам.
+    packing: stmt.packing.all(trip.id).map(i => ({
+      id: i.id, title: i.title, note: i.note, sortOrder: i.sort_order,
+      createdBy: i.created_by, packed: packedByMe.has(i.id),
+    })),
     settlements: stmt.settlements.all(trip.id).map(s => ({
       id: s.id, fromUser: s.from_user, toUser: s.to_user, amount: s.amount,
       note: s.note, createdAt: s.created_at, confirmedAt: s.confirmed_at,
@@ -828,7 +871,9 @@ async function api(req, res, url, user) {
         user.id, ts, ts,
       );
       stmt.addMember.run(id, user.id, user.username || null, user.name || null, user.phone || null, "owner", ts);
-      return json(res, 200, tripPayload(stmt.trip.get(id), { role: "owner" }));
+      // Ответ собираем от лица создателя целиком, а не одной ролью: в нём есть
+      // и то, что зависит от «кого именно» — например личные отметки в списке вещей.
+      return json(res, 200, tripPayload(stmt.trip.get(id), stmt.member.get(id, user.id)));
     }
     return json(res, 405, { error: "method not allowed" });
   }
@@ -957,6 +1002,50 @@ async function api(req, res, url, user) {
         writeShares(id, tripId, body.shares);
         stmt.touchTrip.run(ts, tripId);
         return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+      }
+      return json(res, 405, { error: "method not allowed" });
+    }
+
+    // что взять с собой
+    if (tail[0] === "packing") {
+      if (m === "POST" && !tail[1]) {
+        const body = await readJson(req);
+        const title = str(body.title, 200);
+        if (!title) return json(res, 400, { error: "no title", message: "Напишите, что взять." });
+        const ts = now();
+        stmt.insertPacking.run(uid(), tripId, title, str(body.note, 500) || null,
+          stmt.maxPackOrder.get(tripId).m + 1, user.id, ts);
+        stmt.touchTrip.run(ts, tripId);
+        return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+      }
+      if (tail[1]) {
+        const item = stmt.packingItem.get(tail[1]);
+        if (!item || item.trip_id !== tripId) return json(res, 404, { error: "not found" });
+        // Отметка «сложил» своя у каждого, поэтому её ставит и снимает любой
+        // участник — но только себе: чужой user_id тут взять неоткуда.
+        if (tail[2] === "packed" && m === "POST") {
+          const body = await readJson(req);
+          if (body.packed === false) stmt.packUncheck.run(item.id, user.id);
+          else stmt.packCheck.run(item.id, user.id, now());
+          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+        }
+        if (m === "PATCH") {
+          const body = await readJson(req);
+          const f = {};
+          if ("title" in body) f.title = str(body.title, 200) || item.title;
+          if ("note" in body)  f.note = str(body.note, 500) || null;
+          updateRow("packing_items", item.id, f);
+          stmt.touchTrip.run(now(), tripId);
+          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+        }
+        // Строка общая, поэтому убрать её может любой участник: вещь оказалась
+        // не нужна всем сразу, а не только тому, кто её вписал. Чужие отметки
+        // уходят вместе с ней по внешнему ключу.
+        if (m === "DELETE") {
+          stmt.deletePacking.run(item.id);
+          stmt.touchTrip.run(now(), tripId);
+          return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));
+        }
       }
       return json(res, 405, { error: "method not allowed" });
     }

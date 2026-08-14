@@ -391,7 +391,34 @@ ok("чужое фото участник не удаляет", stranger.status =
 ok("автор своё фото удаляет", (await asJson(me.access_token, "/photos/" + photo.id, { method: "DELETE" })).status === 200);
 ok("файл с диска исчез", fs.readdirSync(WORK + "/trip/photos").length === 0);
 
-/* ---------- 12. Выход и удаление ---------- */
+/* ---------- 12. Что взять с собой ---------- */
+// Главное здесь — что галочки личные: в списке мест отметка общая, а рюкзак
+// каждый собирает свой, и «Маша сложила паспорт» ничего не говорит о вашем.
+r = await asJson(me.access_token, `/trips/${tripId}/packing`, { method: "POST", body: { title: "Переходник", note: "тип C" } });
+ok("вещь добавлена", r.status === 200 && r.body.packing?.length === 1, r.body.error || "");
+const thing = r.body.packing[0];
+ok("новая вещь никем не сложена", thing.packed === false);
+ok("вещь без названия отбита", (await asJson(me.access_token, `/trips/${tripId}/packing`, { method: "POST", body: { title: "  " } })).status === 400);
+
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: { packed: true } });
+ok("отметил, что сложил", r.body.packing[0].packed === true);
+r = await asJson(friend.access_token, "/trips/" + tripId);
+ok("список вещей общий", r.body.packing?.length === 1 && r.body.packing[0].title === "Переходник");
+ok("ЧУЖАЯ ГАЛОЧКА НЕ ВИДНА: у попутчика вещь не сложена", r.body.packing[0].packed === false);
+
+r = await asJson(friend.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: { packed: true } });
+ok("попутчик отметил себе", r.body.packing[0].packed === true);
+r = await asJson(me.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: { packed: false } });
+ok("снял свою отметку", r.body.packing[0].packed === false);
+ok("а у попутчика она осталась", (await asJson(friend.access_token, "/trips/" + tripId)).body.packing[0].packed === true);
+
+r = await asJson(friend.access_token, `/trips/${tripId}/packing/${thing.id}`, { method: "PATCH", body: { title: "Переходник тип C" } });
+ok("название правит любой участник", r.body.packing[0].title === "Переходник тип C");
+r = await asJson(friend.access_token, `/trips/${tripId}/packing/${thing.id}`, { method: "DELETE" });
+ok("вещь убрана", r.status === 200 && r.body.packing.length === 0);
+ok("чужой вещи в другой поездке нет", (await asJson(me.access_token, `/trips/${tripId}/packing/${thing.id}/packed`, { method: "POST", body: {} })).status === 404);
+
+/* ---------- 13. Выход и удаление ---------- */
 r = await asJson(me.access_token, `/trips/${tripId}/leave`, { method: "POST" });
 ok("единственный владелец не может выйти", r.status === 409);
 r = await asJson(friend.access_token, `/trips/${tripId}/leave`, { method: "POST" });

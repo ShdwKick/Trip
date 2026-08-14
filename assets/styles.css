@@ -668,6 +668,43 @@ a{color:var(--md-sys-color-primary)}
 .settle-row.done .state{color:var(--md-ok);background:var(--md-ok-container)}
 .settle-row .btn{height:30px;padding:0 10px;font-size:12.5px}
 
+/* ===================== ЧТО ВЗЯТЬ С СОБОЙ =====================
+   Панель складная: сборы нужны раз в поездку, а список мест — постоянно, и
+   постоянно занимать им верх страницы незачем. */
+.packing summary{cursor:pointer;list-style:none;margin-bottom:0}
+.packing summary::-webkit-details-marker{display:none}
+.packing summary:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:var(--md-sys-shape-corner-s)}
+.packing summary .chev{color:var(--md-sys-color-on-surface-variant);transition:transform .2s var(--ease-emph)}
+.packing[open] summary .chev{transform:rotate(180deg)}
+.packing[open] summary{margin-bottom:14px}
+.pack-row{
+  display:flex;align-items:center;gap:10px;
+  padding:6px 2px;border-bottom:1px solid var(--md-sys-color-outline-variant);
+}
+.pack-row:last-child{border-bottom:0}
+/* Поле выглядит обычной строкой, пока в него не встали: список вещей читают
+   чаще, чем правят, и рамка у каждой строки превратила бы его в анкету. */
+.pk-title{
+  flex:1;min-width:0;font:inherit;font-size:14.5px;color:inherit;
+  background:transparent;border:1px solid transparent;border-radius:var(--md-sys-shape-corner-s);
+  padding:6px 8px;transition:background .15s,border-color .15s;
+}
+.pk-title:hover{background:var(--md-sys-color-surface-container)}
+.pk-title:focus{outline:none;background:var(--md-sys-color-surface-container);border-color:var(--md-sys-color-primary)}
+.pack-row.done .pk-title{color:var(--md-sys-color-on-surface-variant);text-decoration:line-through}
+.pk-del{color:var(--md-sys-color-on-surface-variant);opacity:0;transition:opacity .18s,color .18s}
+.pack-row:hover .pk-del,.pk-del:focus-visible{opacity:1}
+.pk-del:hover{color:var(--md-sys-color-error)}
+@media (hover:none){.pk-del{opacity:.6}}
+.pack-add{display:flex;gap:8px;margin-top:12px}
+.pack-add input{
+  flex:1;min-width:0;height:42px;padding:0 14px;font:inherit;font-size:14.5px;
+  border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface);
+}
+.pack-add input:focus{outline:none;border-color:var(--md-sys-color-primary)}
+.pack-add .btn{flex:none}
+
 /* ===================== ПЕРЕВОД ===================== */
 .pay-phone{display:flex;align-items:center;gap:12px;margin-top:18px;flex-wrap:wrap}
 .pay-phone .num{

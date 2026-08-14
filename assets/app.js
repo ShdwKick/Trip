@@ -232,6 +232,7 @@ function showOnly(id) {
 
 async function route() {
   if (!auth || !auth.isAuthenticated()) return goLogin();
+  viewSeq++;
   const hash = location.hash || "#/";
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)/);
   const trip = hash.match(/^#\/t\/([0-9a-f-]{36})/i);
@@ -241,6 +242,76 @@ async function route() {
   return showTrips();
 }
 addEventListener("hashchange", () => { route().catch(console.error); });
+
+// ───────────────────────── свежесть данных ─────────────────────────
+/**
+ * Поездку ведут несколько человек сразу, а страница живёт долго: её открывают
+ * утром и возвращаются весь день. Без обновления вы отметите музей, который
+ * попутчик отметил час назад, заведёте место, которое он уже завёл, и
+ * подтвердите перевод, который вторая сторона успела удалить.
+ *
+ * Обновляем в двух случаях: вкладка снова стала видимой — телефон достали из
+ * кармана, это самый частый способ вернуться, — и раз в POLL_MS, пока на неё
+ * смотрят. В фоне не опрашиваем: батарея и запросы уходят на страницу, которую
+ * никто не видит, а к возвращению всё равно нужен свежий ответ.
+ *
+ * Своего протокола изменений не заводим: поездка это десятки записей, ответ и
+ * так собирается целиком, и «что именно поменялось» стоило бы дороже, чем
+ * экономит.
+ */
+const POLL_MS = 45000;
+let viewSeq = 0;          // растёт при смене экрана: ответ, опоздавший к уходу, не применяем
+let refreshing = false;
+
+/** Момент неподходящий, если человек прямо сейчас что-то делает руками. */
+function canRefresh() {
+  if (document.hidden) return false;
+  if (!auth || !auth.isAuthenticated()) return false;
+  if (document.querySelector(".scrim.open")) return false;  // открыт диалог: перерисовка вырвала бы из-под рук
+  if (dragId) return false;                                 // тащат место
+  // Курсор в поле — значит что-то пишут прямо в списке (название вещи, новая
+  // строка). Перерисовка стёрла бы недописанное.
+  const focused = document.activeElement;
+  if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return false;
+  // Обучение подсвечивает живые узлы — перерисовка оставит рамку на пустом месте.
+  if (typeof tourActive !== "undefined" && tourActive) return false;
+  return true;
+}
+
+async function refresh() {
+  if (refreshing || !canRefresh()) return;
+  const hash = location.hash || "#/";
+  if (hash.startsWith("#/join/")) return;   // превью приглашения статично, обновлять нечего
+  const trip = hash.match(/^#\/t\/([0-9a-f-]{36})/i);
+  const seq = viewSeq;
+  refreshing = true;
+  try {
+    const data = await api(trip ? "/trips/" + trip[1] : "/trips");
+    if (seq !== viewSeq || !canRefresh()) return;   // пока ходили — сменили экран или взялись за диалог
+    // Перерисовываем только на самом деле изменившееся: у карточек и панелей
+    // есть анимация появления, и перерисовка «в никуда» раз в минуту читается
+    // как моргание. Сравнение целиком тут дешевле выборочного: записей десятки.
+    if (trip) {
+      if (JSON.stringify(data) === JSON.stringify(state.trip)) return;
+      state.trip = data;
+      renderTrip();
+    } else {
+      if (JSON.stringify(data.trips) === JSON.stringify(state.trips)) return;
+      state.me = data.me;
+      state.trips = data.trips;
+      renderTrips();
+    }
+  } catch {
+    // Фоновое обновление молчит: про потерю связи уже сказал значок в шапке, а
+    // всплывашка на ровном месте пугает сильнее, чем помогает.
+  } finally {
+    refreshing = false;
+  }
+}
+
+addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+addEventListener("focus", () => refresh());
+setInterval(() => refresh(), POLL_MS);
 
 // ───────────────────────── список поездок ─────────────────────────
 async function showTrips() {
@@ -442,6 +513,7 @@ function renderTrip() {
   }
 
   renderDebts();
+  renderPacking();
   renderPlaces();
   maybeStartTour("trip");   // свой тур: на списке поездок рассказывать про счета не на чем
 }
@@ -499,6 +571,108 @@ function tripDebts() {
   }
   return { transfers, balance };
 }
+
+// ───────────────────────── что взять с собой ─────────────────────────
+/**
+ * Список вещей общий на поездку, а отметка «сложил» — своя у каждого: паспорт
+ * и зарядку каждый кладёт себе сам, и чужая галочка о вашем рюкзаке не говорит
+ * ничего. Тем и отличается от списка мест, где отметка одна на всех: музей
+ * посещают вместе, а собираются порознь.
+ *
+ * Сервер и отдаёт только ваши отметки — скрывать чужие на клиенте не нужно,
+ * их там просто нет.
+ */
+function renderPacking() {
+  const packing = state.trip.packing || [];
+  const panel = $("packPanel");
+  const box = $("packList");
+  const packed = packing.filter(i => i.packed).length;
+
+  $("packCount").textContent = packing.length ? `${packed} из ${packing.length}` : "";
+  $("packCount").hidden = !packing.length;
+  box.textContent = "";
+
+  if (!packing.length) {
+    box.append(Object.assign(el("p", "hint"),
+      { textContent: "Пусто. Впишите, что нельзя забыть — список увидят все, а отмечать каждый будет своё." }));
+  }
+
+  for (const item of packing) {
+    const row = el("div", "pack-row" + (item.packed ? " done" : ""));
+
+    const check = el("button", "check sm" + (item.packed ? " on" : ""));
+    check.title = item.packed ? "Ещё не сложил" : "Сложил";
+    check.setAttribute("aria-pressed", String(item.packed));
+    check.innerHTML = svg('<polyline points="20 6 9 17 4 12"/>', "icon xs");
+    check.onclick = async () => {
+      // Отзывчиво: галочка переключается сразу, ответ сервера догонит. Отметка
+      // личная и ни с чем не спорит — откатывать нечего, кроме связи.
+      row.classList.toggle("done");
+      check.classList.toggle("on");
+      const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}/packed`,
+        { method: "POST", body: { packed: !item.packed } }));
+      if (data) { state.trip = data; renderTrip(); }
+    };
+
+    // Правка прямо в строке: заводить модальное окно ради слова «Паспорт»
+    // тяжелее самой задачи. Поле выглядит текстом, пока в него не встали.
+    const title = el("input", "pk-title");
+    title.value = item.title;
+    title.maxLength = 200;
+    title.setAttribute("aria-label", "Название вещи");
+    // Сохраняем по паузе в наборе, а не только по уходу из поля. Уход — вещь
+    // ненадёжная: с телефона из приложения выходят кнопкой «домой», и blur
+    // может не случиться вовсе — правка молча пропала бы.
+    let pause = null;
+    const save = async () => {
+      clearTimeout(pause);
+      const next = title.value.trim();
+      if (!next) { title.value = item.title; return; }   // безымянная строка списку не нужна
+      if (next === item.title) return;
+      const ok = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}`,
+        { method: "PATCH", body: { title: next } }));
+      // Строку не перерисовываем: она уже показывает то, что человек набрал, а
+      // перерисовка отобрала бы у него курсор посреди слова. Правим на месте —
+      // item лежит в самом state.trip.packing, так что состояние не расходится.
+      if (ok) item.title = next;
+    };
+    title.oninput = () => { clearTimeout(pause); pause = setTimeout(save, 700); };
+    title.onblur = save;
+    title.onkeydown = e => {
+      if (e.key === "Enter")  { e.preventDefault(); save(); title.blur(); }
+      if (e.key === "Escape") { clearTimeout(pause); title.value = item.title; title.blur(); }
+    };
+
+    const del = el("button", "icon-btn xs pk-del");
+    del.title = "Убрать из списка";
+    del.setAttribute("aria-label", `Убрать «${item.title}» из списка вещей`);
+    del.innerHTML = svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>', "icon sm");
+    del.onclick = async () => {
+      const data = await act(() => api(`/trips/${state.trip.trip.id}/packing/${item.id}`, { method: "DELETE" }));
+      if (data) { state.trip = data; renderTrip(); }
+    };
+
+    row.append(check, title, del);   // распорка не нужна: поле само занимает всё между
+    box.append(row);
+  }
+
+  // Непустой список раскрываем сам — но только пока человек не решил иначе:
+  // свернул однажды, и дальше панель его слушается, а не нас.
+  if (packing.length && !panel.dataset.touched) panel.open = true;
+}
+
+$("packPanel").addEventListener("toggle", () => { $("packPanel").dataset.touched = "1"; });
+
+$("packAdd").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = $("packInput");
+  const title = input.value.trim();
+  if (!title) return;
+  input.value = "";
+  const data = await act(() => api(`/trips/${state.trip.trip.id}/packing`, { method: "POST", body: { title } }));
+  if (data) { state.trip = data; renderTrip(); }
+  input.focus();   // список вещей набивают очередью, а не по одной за заход
+});
 
 function renderDebts() {
   const { trip, members, places, settlements } = state.trip;

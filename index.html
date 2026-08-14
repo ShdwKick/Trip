@@ -138,6 +138,26 @@
       <p class="hint" id="debtHint"></p>
     </div>
 
+    <!-- ===== Что взять с собой =====
+         Список общий, галочки личные: сложил ли переходник сосед — не ваше
+         дело и вашему рюкзаку не помогает. Панель свёрнута, пока в ней пусто:
+         главное на странице — места, а не сборы. -->
+    <details class="panel packing" id="packPanel">
+      <summary class="panel-head">
+        <span class="ph-ic"><svg class="icon sm" viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7z"/><path d="M9 8V5a3 3 0 0 1 6 0v3"/></svg></span>
+        <h2>Что взять с собой</h2>
+        <span class="count" id="packCount"></span>
+        <span class="spacer"></span>
+        <svg class="icon sm chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+      </summary>
+      <div id="packList"></div>
+      <form class="pack-add" id="packAdd">
+        <input type="text" id="packInput" placeholder="Паспорт, зарядка, аптечка…" maxlength="200" autocomplete="off">
+        <button class="btn tonal" type="submit">Добавить</button>
+      </form>
+      <p class="hint">Галочки у каждого свои — общий тут только список.</p>
+    </details>
+
     <div class="list-toolbar">
       <div class="mini-seg" id="placeFilter">
         <button class="sel" data-filter="all">Все</button>
