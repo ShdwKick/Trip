@@ -194,8 +194,6 @@ async function init() {
 
   $("accountBtn").hidden = false;
   $("logoutBtn").hidden = false;
-  $("tourBtn").hidden = false;
-  $("tourBtn").onclick = () => openTour();
   $("accountBtn").onclick = () => openProfile();
   $("logoutBtn").onclick = () => auth.logout();
 
@@ -236,6 +234,7 @@ function openProfile() {
   openScrim("profileScrim");
 }
 $("pfAccountBtn").onclick = () => window.open(auth.accountUrl(), "_blank", "noopener");
+$("pfTourBtn").onclick = () => { closeScrim("profileScrim"); openTour(); };
 
 function showOnly(id) {
   for (const v of ["authView", "tripsView", "tripView", "joinView"]) $(v).hidden = v !== id;

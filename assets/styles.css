@@ -477,7 +477,7 @@ a{color:var(--md-sys-color-primary)}
 .dialog.narrow{width:min(420px,100%)}
 @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.97)}}
 .dlg-actions{display:flex;align-items:center;gap:8px;margin-top:22px;flex-wrap:wrap}
-#pfAccountBtn{margin-top:8px}
+#pfAccountBtn,#pfTourBtn{margin-top:8px}
 
 /* ===================== ЗНАКОМСТВО =====================
    Затемнение с «дырой» на подсвеченном элементе: один блок с box-shadow
@@ -559,7 +559,7 @@ a{color:var(--md-sys-color-primary)}
 .share-code b{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:16px;letter-spacing:.14em;color:var(--md-sys-color-on-surface)}
 
 /* ===================== СЧЁТ В ДИАЛОГЕ МЕСТА ===================== */
-.bill{margin-top:20px;padding-top:16px;border-top:1px solid var(--md-sys-color-outline-variant)}
+.bill,.pf-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--md-sys-color-outline-variant)}
 .bill-head{font-size:13px;font-weight:600;color:var(--md-sys-color-on-surface-variant)}
 .shares{margin-top:14px;display:grid;gap:6px}
 .share-row{display:flex;align-items:center;gap:10px}
