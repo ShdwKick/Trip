@@ -596,6 +596,25 @@
   </div>
 </div>
 
+<!-- ===================== ПРОФИЛЬ =====================
+     Пароль, почта и устройства живут в общем аккаунте BurningHouse — здесь
+     только «вы вошли как» и ссылка туда. Разметка и логика — как в «Моих
+     финансах» (там же id="profileScrim"). -->
+<div class="scrim" id="profileScrim">
+  <div class="dialog narrow">
+    <h3>Профиль</h3>
+    <p class="desc">Вы вошли как <b id="pfLogin">—</b>. Пароль, почта и список устройств — в общем аккаунте BurningHouse, он один на все сервисы.</p>
+    <button class="btn tonal full" id="pfAccountBtn">
+      <svg class="icon sm" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4.4-3 8.3-7 9-4-.7-7-4.6-7-9V7l7-4z"/></svg>
+      Управление аккаунтом
+    </button>
+    <div class="dlg-actions">
+      <div class="spacer"></div>
+      <button class="btn text" data-close>Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <!-- Подсветка для обучения: затемнение с «окном» на реальном элементе и
      карточка рядом. Разметка та же, что в «Моих финансах». -->
 <div class="onb-scrim" id="onbScrim">

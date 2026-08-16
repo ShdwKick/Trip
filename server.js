@@ -268,6 +268,27 @@ for (const sql of [
   try { db.exec(sql); } catch { /* уже есть */ }
 }
 
+// packing_reminders поменял форму уже после первого релиза: была item_id+user_id
+// (напоминание на вещь), стала trip_id+user_id (одно на весь список). CREATE
+// TABLE IF NOT EXISTS таблицу в старом виде не тронет — если она уже была
+// создана прежним кодом, PRAGMA это покажет. Фича прожила меньше суток, терять
+// в ней нечего, поэтому просто пересоздаём таблицу целиком, а не пишем
+// ALTER-миграцию ради нескольких строк.
+{
+  const cols = db.prepare("PRAGMA table_info(packing_reminders)").all().map(c => c.name);
+  if (cols.length && !cols.includes("trip_id")) {
+    db.exec("DROP TABLE packing_reminders");
+    db.exec(`CREATE TABLE packing_reminders (
+      trip_id     TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+      user_id     TEXT NOT NULL,
+      offset_code TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      sent_at     INTEGER,
+      PRIMARY KEY (trip_id, user_id)
+    )`);
+  }
+}
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 

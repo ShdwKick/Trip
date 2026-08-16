@@ -196,7 +196,7 @@ async function init() {
   $("logoutBtn").hidden = false;
   $("tourBtn").hidden = false;
   $("tourBtn").onclick = () => openTour();
-  $("accountBtn").onclick = () => window.open(auth.accountUrl(), "_blank", "noopener");
+  $("accountBtn").onclick = () => openProfile();
   $("logoutBtn").onclick = () => auth.logout();
 
   await route();
@@ -227,6 +227,15 @@ function goLogin() {
   setTimeout(() => auth.login(), 200);   // длительность обязана совпадать с .bh-leaving
 }
 $("loginBtn").onclick = goLogin;
+
+/** Профиль — тот же приём, что и в «Моих финансах»: локальное окошко
+ *  «вы вошли как …» вместо прямого перехода. Пароль, почта и устройства не
+ *  свои — они в общем кабинете, сюда ведёт одна кнопка. */
+function openProfile() {
+  $("pfLogin").textContent = who(state.me) || "—";
+  openScrim("profileScrim");
+}
+$("pfAccountBtn").onclick = () => window.open(auth.accountUrl(), "_blank", "noopener");
 
 function showOnly(id) {
   for (const v of ["authView", "tripsView", "tripView", "joinView"]) $(v).hidden = v !== id;

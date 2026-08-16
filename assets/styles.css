@@ -477,6 +477,7 @@ a{color:var(--md-sys-color-primary)}
 .dialog.narrow{width:min(420px,100%)}
 @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.97)}}
 .dlg-actions{display:flex;align-items:center;gap:8px;margin-top:22px;flex-wrap:wrap}
+#pfAccountBtn{margin-top:8px}
 
 /* ===================== ЗНАКОМСТВО =====================
    Затемнение с «дырой» на подсвеченном элементе: один блок с box-shadow
