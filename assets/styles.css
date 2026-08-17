@@ -213,7 +213,14 @@ a{color:var(--md-sys-color-primary)}
 .hero-actions{margin-top:26px}
 
 /* ===================== СПИСОК ПОЕЗДОК ===================== */
+#tripsTabs{margin-bottom:16px}
 .trip-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+/* Карточка ленты — та же .trip-card, плюс подпись автора внизу. Своей кнопки
+   удаления и метки «моя» у неё нет: тут это не ваша поездка, а чья-то идея. */
+.fc-author{
+  display:flex;align-items:center;gap:6px;margin-top:2px;
+  font-size:12.5px;color:var(--md-sys-color-on-surface-variant);
+}
 .trip-card{
   background:var(--md-sys-color-surface-container-lowest);
   border:1px solid var(--md-sys-color-outline-variant);
@@ -373,6 +380,10 @@ a{color:var(--md-sys-color-primary)}
   background:var(--md-sys-color-surface-container);font-size:13px;font-weight:600;
   color:var(--md-sys-color-on-surface-variant);cursor:pointer;border:0;font-family:inherit;
 }
+/* Галерея публичной поездки — тот же приём, что и у фото места, но крупнее:
+   это первое, что решает «интересно ли пролистать дальше». */
+.p-photos.pt-gallery{margin:0 0 22px}
+.p-photos.pt-gallery img{width:130px;height:96px;cursor:default}
 .drag{cursor:grab;touch-action:none}
 .drag:active{cursor:grabbing}
 

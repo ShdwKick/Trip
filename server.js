@@ -264,6 +264,10 @@ for (const sql of [
   "ALTER TABLE places ADD COLUMN paid_by TEXT",            // кто заплатил по счёту
   "ALTER TABLE places ADD COLUMN split TEXT NOT NULL DEFAULT 'equal'",  // equal | custom
   "ALTER TABLE place_items ADD COLUMN guest TEXT",         // «Гость 1» из чека, если он так разбит
+  // Публикация в ленту — решает владелец, по умолчанию выключено: поездка не
+  // становится публичной сама по себе, это осознанное действие.
+  "ALTER TABLE trips ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE trips ADD COLUMN published_at INTEGER",     // момент публикации — по нему лента сортируется
 ]) {
   try { db.exec(sql); } catch { /* уже есть */ }
 }
@@ -316,6 +320,26 @@ const stmt = {
   touchTrip:   db.prepare("UPDATE trips SET updated_at = ? WHERE id = ?"),
   deleteTrip:  db.prepare("DELETE FROM trips WHERE id = ?"),
   setCode:     db.prepare("UPDATE trips SET join_code = ?, updated_at = ? WHERE id = ?"),
+
+  // Лента: только опубликованное, автор — тот, кто её создал (created_by),
+  // подпись берём из его же строки в trip_members той же поездки — LEFT JOIN,
+  // а не JOIN: создатель мог передать владение и выйти, тогда строки уже нет,
+  // а поездка в ленте остаться должна.
+  feedTrips: db.prepare(`
+    SELECT t.*,
+           (SELECT COUNT(*) FROM places p WHERE p.trip_id = t.id) AS places,
+           (SELECT COUNT(*) FROM photos f WHERE f.trip_id = t.id) AS photos,
+           m.username AS author_username, m.name AS author_name
+      FROM trips t
+      LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = t.created_by
+     WHERE t.is_public = 1
+     ORDER BY t.published_at DESC
+     LIMIT 60`),
+  publicTrip: db.prepare(`
+    SELECT t.*, m.username AS author_username, m.name AS author_name
+      FROM trips t
+      LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = t.created_by
+     WHERE t.id = ? AND t.is_public = 1`),
 
   member:      db.prepare("SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?"),
   members:     db.prepare("SELECT user_id, username, name, phone, role, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at"),
@@ -684,7 +708,7 @@ function tripPayload(trip, me) {
       id: trip.id, title: trip.title, destination: trip.destination, description: trip.description,
       startsOn: trip.starts_on, endsOn: trip.ends_on, currency: trip.currency, status: trip.status,
       joinCode: trip.join_code, createdBy: trip.created_by, createdAt: trip.created_at, updatedAt: trip.updated_at,
-      myRole: me.role,
+      myRole: me.role, isPublic: !!trip.is_public, publishedAt: trip.published_at || null,
     },
     // Телефон отдаём только внутри поездки — это группа, которую собрал сам
     // человек. В превью приглашения (его видит любой со ссылкой) номеров нет.
@@ -719,6 +743,67 @@ function tripPayload(trip, me) {
       note: s.note, createdAt: s.created_at, confirmedAt: s.confirmed_at,
     })),
   };
+}
+
+/**
+ * Публичная версия поездки — то, что видно без входа. Ни денег (цена места,
+ * кто платил, чек, доли), ни состава участников: попросили именно это убрать,
+ * и полей для них тут просто нет — не фильтруем на лету, а собираем ответ
+ * заново из безопасного подмножества, чтобы новое поле в tripPayload не
+ * протекло сюда само по забывчивости.
+ */
+function publicTripPayload(trip) {
+  const places = stmt.places.all(trip.id);
+  const photos = stmt.photosOfTrip.all(trip.id);
+  const byPlace = new Map();
+  for (const ph of photos) {
+    const key = ph.place_id || "";
+    if (!byPlace.has(key)) byPlace.set(key, []);
+    byPlace.get(key).push({ id: ph.id, caption: ph.caption });
+  }
+  return {
+    trip: {
+      id: trip.id, title: trip.title, destination: trip.destination, description: trip.description,
+      startsOn: trip.starts_on, endsOn: trip.ends_on, status: trip.status,
+      publishedAt: trip.published_at,
+      author: { username: trip.author_username || null, name: trip.author_name || null },
+    },
+    places: places.map(p => ({
+      id: p.id, title: p.title, kind: p.kind, note: p.note, address: p.address,
+      mapUrl: p.map_url, lat: p.lat, lon: p.lon, linkUrl: p.link_url,
+      day: p.day, timeFrom: p.time_from, timeTo: p.time_to,
+      sortOrder: p.sort_order, photos: byPlace.get(p.id) || [],
+    })),
+    tripPhotos: byPlace.get("") || [],
+  };
+}
+
+/** Независимая копия чужой опубликованной поездки — не членство, а свой
+ *  черновик с той же затравкой: места без цен, статусов и фотографий (файлы
+ *  чужие, тащить их в свою поездку не наше дело), даты — свои, планируете сами. */
+function forkTrip(source, user) {
+  const id = uid(), ts = now();
+  stmt.insertTrip.run(
+    id, source.title, source.destination, source.description,
+    null, null,
+    source.currency, "planning", newJoinCode(),
+    user.id, ts, ts,
+  );
+  stmt.addMember.run(id, user.id, user.username || null, user.name || null, user.phone || null, user.email || null, "owner", ts);
+
+  let order = 0;
+  for (const p of stmt.places.all(source.id)) {
+    stmt.insertPlace.run(
+      uid(), id, p.title, p.kind, p.note, p.address,
+      p.map_url, p.lat, p.lon, p.link_url,
+      p.day, p.time_from, p.time_to,
+      null, null, "total",
+      null, "equal",
+      0, null, null,
+      ++order, user.id, ts, ts,
+    );
+  }
+  return tripPayload(stmt.trip.get(id), stmt.member.get(id, user.id));
 }
 
 /**
@@ -918,6 +1003,43 @@ const server = http.createServer(async (req, res) => {
       remindOffsets: Object.keys(REMIND_OFFSETS).map(code => ({ code, label: REMIND_LABELS[code] })),
     });
 
+    // ── лента: видна без входа ──────────────────────────────────
+    // Смотреть чужие идеи для поездки не должно требовать регистрации — вход
+    // просит только действие (скопировать себе, создать свою). Три маршрута
+    // тут, а не внутри api(), намеренно: тот всегда предполагает вошедшего
+    // пользователя, а здесь предмет разговора — как раз его отсутствие.
+    if (p === "/api/feed" && req.method === "GET") {
+      return json(res, 200, {
+        trips: stmt.feedTrips.all().map(t => ({
+          id: t.id, title: t.title, destination: t.destination,
+          startsOn: t.starts_on, endsOn: t.ends_on, status: t.status,
+          places: t.places, photos: t.photos, publishedAt: t.published_at,
+          // Автора может уже не быть среди участников (передал поездку и вышел) —
+          // тогда оба поля null, а не подпись, придуманная из старых данных.
+          author: { username: t.author_username || null, name: t.author_name || null },
+        })),
+      });
+    }
+    if (p.startsWith("/api/public/trips/") && req.method === "GET") {
+      const trip = stmt.publicTrip.get(p.slice("/api/public/trips/".length));
+      if (!trip) return json(res, 404, { error: "not found" });
+      return json(res, 200, publicTripPayload(trip));
+    }
+    if (p.startsWith("/api/public/photos/") && req.method === "GET") {
+      const ph = stmt.photo.get(p.slice("/api/public/photos/".length));
+      const phTrip = ph && stmt.trip.get(ph.trip_id);
+      if (!ph || !phTrip || !phTrip.is_public) return json(res, 404, { error: "not found" });
+      const file = path.join(PHOTO_DIR, ph.file);
+      if (!fs.existsSync(file)) return json(res, 404, { error: "file missing" });
+      res.writeHead(200, {
+        "Content-Type": ph.mime, "Content-Length": ph.bytes,
+        // Публичное — можно кэшировать где угодно, не только у самого человека
+        // (обычный /api/photos/:id отдаёт private ровно по обратной причине).
+        "Cache-Control": "public, max-age=31536000, immutable",
+      });
+      return fs.createReadStream(file).pipe(res);
+    }
+
     if (p.startsWith("/api/")) {
       // Вся авторизация — вот эти две строки. Подпись проверяется локально,
       // запроса в auth-сервис здесь не происходит.
@@ -1007,9 +1129,20 @@ async function api(req, res, url, user) {
   // ── одна поездка ────────────────────────────────────────────
   if (seg[1] === "trips" && seg[2]) {
     const tripId = seg[2];
+    const tail = seg.slice(3);
+
+    // Копия чужой опубликованной поездки — доступна любому вошедшему, вне
+    // зависимости от членства в оригинале: тут им и не становятся, это
+    // отдельное дерево. Поэтому до общего access() — тот 404-ит как раз
+    // за отсутствие членства, а здесь оно и не требуется.
+    if (tail[0] === "fork" && !tail[1] && m === "POST") {
+      const source = stmt.publicTrip.get(tripId);
+      if (!source) return json(res, 404, { error: "not found" });
+      return json(res, 200, forkTrip(source, user));
+    }
+
     const ctx = access(tripId, user);
     if (!ctx) return json(res, 404, { error: "not found" });   // 404, а не 403: чужая поездка не должна даже подтверждаться
-    const tail = seg.slice(3);
 
     if (!tail.length) {
       if (m === "GET") return json(res, 200, tripPayload(ctx.trip, ctx.member));
@@ -1023,6 +1156,15 @@ async function api(req, res, url, user) {
         if ("endsOn" in body)      f.ends_on = isDate(body.endsOn) ? body.endsOn : null;
         if ("currency" in body)    f.currency = str(body.currency, 8) || "RUB";
         if ("status" in body)      f.status = oneOf(body.status, STATUSES) || ctx.trip.status;
+        // Публикует только владелец — это открывает поездку всему интернету,
+        // серьёзнее, чем поправить название. published_at чистим при снятии
+        // с публикации, а не оставляем висеть: по нему лента и сортируется.
+        if ("isPublic" in body) {
+          if (!ctx.isOwner) return json(res, 403, { error: "owner only", message: "Публиковать поездку может только владелец." });
+          const wantPublic = !!body.isPublic;
+          f.is_public = wantPublic ? 1 : 0;
+          f.published_at = wantPublic ? (ctx.trip.published_at || now()) : null;
+        }
         f.updated_at = now();
         updateRow("trips", tripId, f);
         return json(res, 200, tripPayload(stmt.trip.get(tripId), ctx.member));

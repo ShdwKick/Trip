@@ -530,6 +530,75 @@ r = await asJson(me.access_token, `/trips/${noDateTrip}/packing/remind`, { metho
 ok("БЕЗ ДАТЫ НАЧАЛА НАПОМИНАНИЕ НЕ СТАВИТСЯ", r.status === 400 && r.body.error === "no_date", JSON.stringify(r.body));
 ok("тестовую поездку без даты убрали", (await asJson(me.access_token, "/trips/" + noDateTrip, { method: "DELETE" })).status === 200);
 
+/* ---------- 13.9. Публикация, лента, копирование ---------- */
+// Лента должна быть пустой без единой опубликованной поездки — иначе следующие
+// проверки могли бы случайно совпасть с чем-то посторонним.
+r = await (await fetch(TRIP + "/api/feed")).json();
+ok("лента пуста, пока никто не опубликовал поездку", Array.isArray(r.trips) && r.trips.length === 0, JSON.stringify(r));
+
+r = await asJson(friend.access_token, `/trips/${tripId}`, { method: "PATCH", body: { isPublic: true } });
+ok("ПУБЛИКОВАТЬ МОЖЕТ ТОЛЬКО ВЛАДЕЛЕЦ", r.status === 403 && r.body.error === "owner only", JSON.stringify(r.body));
+
+r = await asJson(me.access_token, `/trips/${tripId}`, { method: "PATCH", body: { isPublic: true } });
+ok("владелец опубликовал поездку", r.status === 200 && r.body.trip.isPublic === true && !!r.body.trip.publishedAt, JSON.stringify(r.body.trip));
+
+// Фото — специально для проверки публичного маршрута: то, что грузили раньше
+// в этом же файле, тест на удаление уже стёр с диска.
+up = await call(me.access_token, `/places/${bath.id}/photos`, { method: "POST", raw: true, body: PNG, headers: { "Content-Type": "image/png" } });
+const publicPhotoId = (await up.json()).photo.id;
+
+// Лента — БЕЗ ТОКЕНА совсем, обычным fetch: это и есть смысл проверки.
+r = await (await fetch(TRIP + "/api/feed")).json();
+const feedItem = r.trips.find(t => t.id === tripId);
+ok("опубликованная поездка попала в ленту без входа", !!feedItem, JSON.stringify(r.trips.map(t => t.id)));
+ok("в ленте указан автор", feedItem.author.username === "danil");
+ok("в ленте нет чужих поездок — только опубликованные", r.trips.every(t => t.id === tripId));
+
+let pub = await (await fetch(TRIP + "/api/public/trips/" + tripId)).json();
+ok("публичная поездка отдаётся без входа", pub.trip?.title === "Грузия на майские", JSON.stringify(pub.trip));
+ok("автор виден и здесь", pub.trip.author.username === "danil");
+const pubBath = pub.places.find(p => p.title === "Серные бани");
+ok("место с заметкой и координатами видно", pubBath?.note === "взять полотенце" && pubBath.lat === 41.6892);
+ok("НИ ЦЕНЫ, НИ ПЛАТЕЛЬЩИКА В ПУБЛИЧНОМ МЕСТЕ НЕТ", !("costAmount" in pubBath) && !("paidBy" in pubBath) && !("done" in pubBath) && !("items" in pubBath));
+ok("НИ УЧАСТНИКОВ, НИ ПРИГЛАСИТЕЛЬНОГО КОДА В ОТВЕТЕ НЕТ", !("members" in pub) && !("joinCode" in pub.trip) && !("settlements" in pub));
+ok("фото места отдаётся публично", pubBath.photos.some(p => p.id === publicPhotoId));
+
+r = await fetch(TRIP + "/api/public/photos/" + publicPhotoId);
+ok("публичное фото отдаётся без токена", r.status === 200 && r.headers.get("content-type") === "image/png");
+
+r = await asJson(me.access_token, `/trips/${tripId}`, { method: "PATCH", body: { isPublic: false } });
+ok("снято с публикации", r.body.trip.isPublic === false && r.body.trip.publishedAt === null);
+ok("ушла и из ленты", (await (await fetch(TRIP + "/api/feed")).json()).trips.length === 0);
+ok("НЕОПУБЛИКОВАННАЯ ПОЕЗДКА ПО ПРЯМОЙ ССЫЛКЕ НЕ ОТДАЁТСЯ", (await fetch(TRIP + "/api/public/trips/" + tripId)).status === 404);
+ok("и фото из неё — тоже", (await fetch(TRIP + "/api/public/photos/" + publicPhotoId)).status === 404);
+
+// Публикуем заново — для проверки копирования.
+await asJson(me.access_token, `/trips/${tripId}`, { method: "PATCH", body: { isPublic: true } });
+
+r = await asJson(friend.access_token, `/trips/${tripId}/fork`, { method: "POST" });
+ok("КОПИЯ СОЗДАНА ЧУЖИМ ЧЕЛОВЕКОМ, БЕЗ ЧЛЕНСТВА В ОРИГИНАЛЕ", r.status === 200 && r.body.trip.title === "Грузия на майские", JSON.stringify(r.body.trip));
+const forkedTrip = r.body.trip;
+ok("копия — своя, роль владельца", forkedTrip.myRole === "owner");
+ok("даты не потащились — свои, планировать заново", forkedTrip.startsOn === null && forkedTrip.endsOn === null);
+ok("копия не опубликована сама по себе", forkedTrip.isPublic === false);
+ok("оригинал форкнувшего не задело — он не стал участником", (await asJson(me.access_token, "/trips/" + tripId)).body.members.length === 2);
+
+const forkedBath = r.body.places.find(p => p.title === "Серные бани");
+ok("места скопированы с описанием и координатами", forkedBath?.note === "взять полотенце" && forkedBath.lat === 41.6892);
+ok("НО БЕЗ ЦЕНЫ И ФОТО — это чужой бюджет и чужие снимки", forkedBath.costAmount === null && forkedBath.photos.length === 0);
+ok("владелец копии — тот, кто её взял, а не автор оригинала", r.body.members.length === 1 && r.body.members[0].userId === friendId);
+
+r = await asJson(friend.access_token, "/trips/" + forkedTrip.id, { method: "DELETE" });
+ok("копию можно удалить как обычную свою поездку", r.status === 200);
+
+r = await asJson(me.access_token, "/trips", { method: "POST", body: { title: "Не для чужих глаз" } });
+const privateTrip = r.body.trip.id;
+ok("ЧУЖУЮ НЕОПУБЛИКОВАННУЮ ПОЕЗДКУ СКОПИРОВАТЬ НЕЛЬЗЯ", (await asJson(friend.access_token, `/trips/${privateTrip}/fork`, { method: "POST" })).status === 404);
+ok("КОПИРОВАНИЕ ТРЕБУЕТ ВХОДА", (await fetch(TRIP + "/api/trips/" + tripId + "/fork", { method: "POST" })).status === 401);
+ok("тестовую приватную поездку убрали", (await asJson(me.access_token, "/trips/" + privateTrip, { method: "DELETE" })).status === 200);
+
+await asJson(me.access_token, `/trips/${tripId}`, { method: "PATCH", body: { isPublic: false } });
+
 /* ---------- 14. Выход и удаление ---------- */
 r = await asJson(me.access_token, `/trips/${tripId}/leave`, { method: "POST" });
 ok("единственный владелец не может выйти", r.status === 409);

@@ -144,6 +144,22 @@ async function api(path, { method = "GET", body, raw, headers } = {}) {
   return data;
 }
 
+/**
+ * Лента и открытая по ссылке публичная поездка — без токена вовсе, поэтому
+ * не через api()/auth.fetch: тот при отсутствии входа сразу бросает
+ * AuthRequiredError и уводит на вход, а здесь отсутствие входа — нормальный,
+ * ожидаемый случай, а не ошибка.
+ */
+async function publicApi(path) {
+  try {
+    const res = await fetch(path);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 /** Обёртка для действий: сама показывает причину отказа, не роняя приложение. */
 async function act(fn, okText) {
   try {
@@ -182,20 +198,22 @@ async function init() {
   }
 
   // Своей страницы входа у сервиса нет и не нужно: аккаунт общий, форма живёт
-  // на auth-домене. Неавторизованного уводим туда молча — на проде «увидеть
-  // сервис без входа» всё равно нельзя, а лишний экран-заглушка только добавил
-  // бы клик к тому, что и так произойдёт.
-  if (!auth.isAuthenticated()) return goLogin();
-
-  // Кто я — знаем сразу из токена, не дожидаясь списка поездок. Иначе при
-  // заходе прямо по ссылке на поездку интерфейс не понимает, где «вы»:
-  // пропадают и пометки, и кнопка «Перевести» у своего долга.
-  state.me = auth.getUser() || state.me;
-
-  $("accountBtn").hidden = false;
-  $("logoutBtn").hidden = false;
-  $("accountBtn").onclick = () => openProfile();
-  $("logoutBtn").onclick = () => auth.logout();
+  // на auth-домене. Неавторизованного уводим туда молча — НО только с
+  // маршрутов, которым вход действительно нужен: лента и открытая по ссылке
+  // публичная поездка работают и без него, это решает route().
+  if (auth.isAuthenticated()) {
+    // Кто я — знаем сразу из токена, не дожидаясь списка поездок. Иначе при
+    // заходе прямо по ссылке на поездку интерфейс не понимает, где «вы»:
+    // пропадают и пометки, и кнопка «Перевести» у своего долга.
+    state.me = auth.getUser() || state.me;
+    $("accountBtn").hidden = false;
+    $("logoutBtn").hidden = false;
+    $("accountBtn").onclick = () => openProfile();
+    $("logoutBtn").onclick = () => auth.logout();
+  } else {
+    $("guestLoginBtn").hidden = false;
+    $("guestLoginBtn").onclick = goLogin;
+  }
 
   await route();
 }
@@ -237,19 +255,27 @@ $("pfAccountBtn").onclick = () => window.open(auth.accountUrl(), "_blank", "noop
 $("pfTourBtn").onclick = () => { closeScrim("profileScrim"); openTour(); };
 
 function showOnly(id) {
-  for (const v of ["authView", "tripsView", "tripView", "joinView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "tripsView", "tripView", "publicTripView", "joinView"]) $(v).hidden = v !== id;
 }
 
 async function route() {
-  if (!auth || !auth.isAuthenticated()) return goLogin();
   viewSeq++;
   const hash = location.hash || "#/";
+  const feed = hash === "#/feed";
+  const pub = hash.match(/^#\/p\/([0-9a-f-]{36})/i);
+
+  // Лента и открытая по ссылке публичная поездка работают без входа —
+  // остальное по-прежнему уводит на auth молча.
+  if (feed) return showTrips("feed");
+  if (pub) return openPublicTrip(pub[1]);
+  if (!auth || !auth.isAuthenticated()) return goLogin();
+
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)/);
   const trip = hash.match(/^#\/t\/([0-9a-f-]{36})/i);
 
   if (join) return showJoin(join[1].toUpperCase());
   if (trip) return openTrip(trip[1]);
-  return showTrips();
+  return showTrips("mine");
 }
 addEventListener("hashchange", () => { route().catch(console.error); });
 
@@ -291,7 +317,9 @@ function canRefresh() {
 async function refresh() {
   if (refreshing || !canRefresh()) return;
   const hash = location.hash || "#/";
-  if (hash.startsWith("#/join/")) return;   // превью приглашения статично, обновлять нечего
+  // Превью приглашения статично; лента и публичная поездка — отдельные
+  // маршруты со своей загрузкой (publicApi), сюда их подмешивать не нужно.
+  if (hash.startsWith("#/join/") || hash === "#/feed" || hash.startsWith("#/p/")) return;
   const trip = hash.match(/^#\/t\/([0-9a-f-]{36})/i);
   const seq = viewSeq;
   refreshing = true;
@@ -324,10 +352,35 @@ addEventListener("focus", () => refresh());
 setInterval(() => refresh(), POLL_MS);
 
 // ───────────────────────── список поездок ─────────────────────────
-async function showTrips() {
+/**
+ * Своя (`mine`) и опубликованная всеми (`feed`) — одна и та же страница, два
+ * таба. Вкладка живёт в хэше (`#/` / `#/feed`), а не в памяти: так на неё
+ * можно дать прямую ссылку, и «Свои» без входа не откроется сама по себе,
+ * даже если человек когда-то на неё заходил.
+ */
+async function showTrips(tab = "mine") {
   showOnly("tripsView");
   state.trip = null;
-  document.title = "Куда поедем?";   // ушли из поездки — вернули вопрос без ответа
+  state.tripsTab = tab;
+  document.title = tab === "feed" ? "Куда поедем? — Лента" : "Куда поедем?";
+  $("tripsTitle").textContent = tab === "feed" ? "Лента" : "Мои поездки";
+  $("tripsTabs").querySelectorAll("button").forEach(b => b.classList.toggle("sel", b.dataset.tab === tab));
+  $("newTripBtn").hidden = tab === "feed";
+  $("tripGrid").hidden = tab === "feed";
+  $("feedGrid").hidden = tab !== "feed";
+
+  if (tab === "feed") {
+    $("tripsEmpty").hidden = true;
+    const data = await publicApi("/api/feed");
+    state.feed = data?.trips || [];
+    renderFeed();
+    return;
+  }
+
+  $("feedEmpty").hidden = true;
+  // «Свои» — не бывает без входа. Сюда доходят и по клику вкладки, стоя на
+  // ленте анонимно: тогда просто уводим на вход, а не показываем пустоту.
+  if (!auth || !auth.isAuthenticated()) return goLogin();
   const data = await act(() => api("/trips"));
   if (!data) return;
   state.me = data.me;
@@ -336,6 +389,14 @@ async function showTrips() {
   renderTrips();
   maybeStartTour("list");
 }
+
+$("tripsTabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  const tab = b.dataset.tab;
+  if (tab === "mine" && (!auth || !auth.isAuthenticated())) return goLogin();
+  location.hash = tab === "feed" ? "#/feed" : "#/";
+});
 
 function renderTrips() {
   const grid = $("tripGrid");
@@ -393,7 +454,42 @@ function renderTrips() {
   });
 }
 
-$("newTripBtn").onclick = () => openTripDialog();
+$("newTripBtn").onclick = () => {
+  if (!auth || !auth.isAuthenticated()) return goLogin();
+  openTripDialog();
+};
+
+/** Лента: чужие (и свои) опубликованные поездки. Карточка ведёт на публичную
+ *  страницу — открывается без входа, вход просит уже действие («Взять себе»). */
+function renderFeed() {
+  const grid = $("feedGrid");
+  grid.textContent = "";
+  const trips = state.feed || [];
+  $("feedEmpty").hidden = trips.length > 0;
+
+  trips.forEach((t, i) => {
+    const card = el("div", "trip-card feed-card");
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    card.style.animationDelay = Math.min(i * 40, 240) + "ms";
+    card.innerHTML = `
+      <div class="tc-top">
+        <span class="tc-title">${esc(t.title)}</span>
+        <span class="chip status" data-s="${t.status}">${STATUS_LABEL[t.status] || ""}</span>
+      </div>
+      ${t.destination ? `<div class="tc-dest">${svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>', "icon xs")}${esc(t.destination)}</div>` : ""}
+      <div class="tc-dates">${esc(dateRange(t.startsOn, t.endsOn))}</div>
+      <div class="tc-foot">
+        <span class="bit">${svg('<polyline points="20 6 9 17 4 12"/>', "icon xs")}${t.places} ${plural(t.places, "место", "места", "мест")}</span>
+        ${t.photos ? `<span class="bit">${svg('<path d="M3 7h3l2-2h8l2 2h3v13H3z"/><circle cx="12" cy="13" r="4"/>', "icon xs")}${t.photos}</span>` : ""}
+      </div>
+      <div class="fc-author">${svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/>', "icon xs")}${esc(t.author.name || t.author.username || "автор неизвестен")}</div>`;
+    const open = () => { location.hash = "#/p/" + t.id; };
+    card.onclick = open;
+    card.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+    grid.append(card);
+  });
+}
 
 // ───────────────────────── одна поездка ─────────────────────────
 async function openTrip(id) {
@@ -403,6 +499,131 @@ async function openTrip(id) {
   state.trip = data;
   renderTrip();
 }
+
+// ───────────────────────── публичная поездка (без входа) ─────────────────────────
+/**
+ * `#/p/<id>` — та же поездка, что видна в ленте: места, фото, маршрут. Ни
+ * чеков, ни списка участников тут нет и быть не может — сервер их для этого
+ * маршрута просто не присылает, фильтровать на клиенте нечего.
+ */
+async function openPublicTrip(id) {
+  showOnly("publicTripView");
+  const data = await publicApi("/api/public/trips/" + id);
+  if (!data) {
+    snack("Поездка не найдена или больше не опубликована");
+    location.hash = "#/feed";
+    return;
+  }
+  state.publicTrip = data;
+  renderPublicTrip();
+}
+
+function renderPublicTrip() {
+  const { trip, places, tripPhotos } = state.publicTrip;
+  document.title = "Куда поедем? — " + trip.title;
+
+  $("ptTitle").textContent = trip.title;
+  $("ptMeta").innerHTML = [
+    trip.destination ? `<span class="bit">${svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>', "icon xs")}${esc(trip.destination)}</span>` : "",
+    `<span class="bit">${svg('<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/>', "icon xs")}${esc(dateRange(trip.startsOn, trip.endsOn))}</span>`,
+  ].filter(Boolean).join("");
+  $("ptAuthor").innerHTML = svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/>', "icon xs")
+    + esc(trip.author.name || trip.author.username || "автор неизвестен");
+  $("ptDesc").hidden = !trip.description;
+  $("ptDesc").textContent = trip.description || "";
+
+  const photos = $("ptPhotos");
+  photos.innerHTML = "";
+  photos.hidden = !tripPhotos.length;
+  for (const ph of tripPhotos.slice(0, 8)) {
+    const img = el("img");
+    img.alt = ""; img.loading = "lazy";
+    img.src = "/api/public/photos/" + ph.id;
+    photos.append(img);
+  }
+
+  const box = $("ptPlaceList");
+  box.textContent = "";
+  $("ptEmpty").hidden = places.length > 0;
+  const start = parseDay(trip.startsOn);
+  for (const group of groupPlaces(places)) {
+    const wrap = el("div", "day-group");
+    const head = el("div", "day-head");
+    if (group.day) {
+      const d = parseDay(group.day);
+      const nth = start ? Math.round((d - start) / 86400000) + 1 : null;
+      head.innerHTML =
+        (nth && nth > 0 ? `<span class="num">${nth}</span>` : "") +
+        `<span>${esc(dayFmt.format(d))}</span><span class="rest">${esc(weekdayFmt.format(d))}</span>`;
+    } else {
+      head.innerHTML = '<span>Без даты</span><span class="rest">когда-нибудь за поездку</span>';
+    }
+    wrap.append(head);
+    for (const p of group.places) wrap.append(publicPlaceCard(p));
+    box.append(wrap);
+  }
+}
+
+/** Упрощённая карточка места для публичного просмотра: ни галочки, ни цены,
+ *  ни правки — только то, что помогает решить, ехать сюда или нет. */
+function publicPlaceCard(p) {
+  const card = el("div", "place");
+  const k = kindOf(p.kind);
+  const line = [];
+  if (p.timeFrom) line.push(`<span class="bit">${svg('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>', "icon xs")}${esc(p.timeFrom)}${p.timeTo ? "–" + esc(p.timeTo) : ""}</span>`);
+  if (p.address) line.push(`<span class="bit">${svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>', "icon xs")}${esc(p.address)}</span>`);
+
+  const body = el("div", "p-body");
+  body.innerHTML = `
+    <div class="p-head">
+      <span class="p-kind" title="${esc(k.label)}">${svg(k.icon)}</span>
+      <div style="min-width:0;flex:1">
+        <div class="p-title">${esc(p.title)}</div>
+        <div class="p-line">${line.join("")}</div>
+      </div>
+    </div>
+    ${p.note ? `<div class="p-note">${esc(p.note)}</div>` : ""}`;
+
+  const links = el("div", "p-links");
+  if (p.lat != null) {
+    const a = el("a");
+    a.href = pointUrl(p); a.target = "_blank"; a.rel = "noopener";
+    a.innerHTML = svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>', "icon xs") + "На карте";
+    links.append(a);
+  } else if (p.mapUrl) {
+    const a = el("a");
+    a.href = p.mapUrl; a.target = "_blank"; a.rel = "noopener";
+    a.innerHTML = svg('<path d="M21 10c0 6-9 12-9 12S3 16 3 10a9 9 0 0 1 18 0z"/>', "icon xs") + "Ссылка с карты";
+    links.append(a);
+  }
+  if (p.linkUrl) {
+    const a = el("a");
+    a.href = p.linkUrl; a.target = "_blank"; a.rel = "noopener";
+    a.innerHTML = svg('<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>', "icon xs") + "Бронь и билеты";
+    links.append(a);
+  }
+  if (links.children.length) body.append(links);
+
+  if (p.photos.length) {
+    const strip = el("div", "p-photos");
+    for (const ph of p.photos.slice(0, 4)) {
+      const img = el("img");
+      img.alt = ""; img.loading = "lazy";
+      img.src = "/api/public/photos/" + ph.id;
+      strip.append(img);
+    }
+    body.append(strip);
+  }
+
+  card.append(body);
+  return card;
+}
+
+$("ptForkBtn").onclick = async () => {
+  if (!auth || !auth.isAuthenticated()) return goLogin();
+  const data = await act(() => api(`/trips/${state.publicTrip.trip.id}/fork`, { method: "POST" }), "Поездка скопирована — теперь она ваша");
+  if (data) location.hash = "#/t/" + data.trip.id;
+};
 
 function tripCosts() {
   const { trip, members, places } = state.trip;
@@ -482,6 +703,11 @@ function renderTrip() {
 
   $("thDesc").hidden = !trip.description;
   $("thDesc").textContent = trip.description || "";
+
+  // Публикует только владелец — это открывает поездку всему интернету.
+  $("publishBtn").hidden = trip.myRole !== "owner";
+  $("publishBtn").classList.toggle("tonal", trip.isPublic);
+  $("publishBtn").title = trip.isPublic ? "Опубликовано в ленте" : "Публикация в ленте";
 
   const done = places.filter(p => p.done).length;
   const { total, perHead, currency, heads } = tripCosts();
@@ -2526,6 +2752,29 @@ $("shareRevokeBtn").onclick = () => {
     state.trip.trip.joinCode = null;
     openShareDialog();
   });
+};
+
+// ───────────────────────── публикация в ленте ─────────────────────────
+$("publishBtn").onclick = () => openPublishDialog();
+
+function openPublishDialog() {
+  const trip = state.trip.trip;
+  $("publishStatus").textContent = trip.isPublic
+    ? `Опубликовано ${dayFmtShort.format(new Date(trip.publishedAt))} — видна в ленте и по прямой ссылке.`
+    : "Пока не опубликовано — видите только вы и участники.";
+  $("publishToggleBtn").textContent = trip.isPublic ? "Снять с публикации" : "Опубликовать";
+  $("publishToggleBtn").classList.toggle("danger", trip.isPublic);
+  openScrim("publishScrim");
+}
+
+$("publishToggleBtn").onclick = async () => {
+  const trip = state.trip.trip;
+  const data = await act(() => api("/trips/" + trip.id, { method: "PATCH", body: { isPublic: !trip.isPublic } }),
+    trip.isPublic ? "Снято с публикации" : "Опубликовано в ленте");
+  if (!data) return;
+  closeScrim("publishScrim");
+  state.trip = data;
+  renderTrip();
 };
 
 async function showJoin(code) {
