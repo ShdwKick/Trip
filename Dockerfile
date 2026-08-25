@@ -11,7 +11,7 @@ WORKDIR /app
 # Маска захватывает server.js, auth-client.js, gigachat.js и всё, что появится
 # дальше. Локальный запускатор dev.mjs сюда не попадает — он .mjs.
 COPY *.js ./
-COPY index.html ./
+COPY index.html robots.txt sitemap.xml ./
 COPY assets/ ./assets/
 
 # Проверка на этапе сборки: пропавший модуль ломает сборку, а не контейнер на

@@ -895,14 +895,21 @@ const MIME = {
   ".js": "application/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
   ".ico": "image/x-icon", ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8", ".xml": "application/xml; charset=utf-8",
 };
 const PHOTO_MIME = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
 
-/** Отдаём только index.html и assets/. store.db, server.js и photos/ снаружи недоступны. */
+// robots.txt и sitemap.xml поисковики по конвенции ищут именно в корне сайта,
+// а не там, куда их реально положили (как и index.html — как и в остальных
+// сервисах, см. Home/server.js, Финансы/server.js). Каждый новый — явно сюда
+// И явным COPY в Dockerfile, ничего не отдаётся по маске.
+const ROOT_FILES = ["/robots.txt", "/sitemap.xml"];
+
+/** Отдаём только index.html, assets/ и ROOT_FILES. store.db, server.js и photos/ снаружи недоступны. */
 function serveStatic(res, pathname) {
-  if (pathname !== "/index.html" && !pathname.startsWith("/assets/")) return false;
+  if (pathname !== "/index.html" && !pathname.startsWith("/assets/") && !ROOT_FILES.includes(pathname)) return false;
   const file = path.join(__dirname, path.normalize(pathname).replace(/^([\\/])+/, ""));
-  if (file !== APP_HTML && !file.startsWith(ASSETS_DIR + path.sep)) return false;
+  if (file !== APP_HTML && !file.startsWith(ASSETS_DIR + path.sep) && !ROOT_FILES.includes(pathname)) return false;
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
   res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
   fs.createReadStream(file).pipe(res);

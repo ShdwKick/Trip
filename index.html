@@ -2,10 +2,35 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Куда поедем?</title>
+<title>Куда поедем? — BurningHouse</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#07120f">
+<!-- Сервис за входом: до логина здесь только форма входа (см. app.js, route()).
+     Лента (#/feed) и открытая по ссылке поездка (#/p/<id>) работают без входа,
+     но это хэш-маршруты — для поисковика это один и тот же адрес, отдельной
+     страницей их не увидеть и не проиндексировать. Индексировать пока нечего,
+     поэтому noindex; robots.txt при этом не блокирует краулинг — иначе Google
+     не увидит noindex и не снимет URL из выдачи, если он там уже был. -->
+<meta name="robots" content="noindex, follow">
+<meta name="description" content="Совместное планирование поездок: общий чек-лист мест с картами, датами и фотографиями, разбор счетов и маршрут по дням. Часть BurningHouse, вход через единый аккаунт.">
+<link rel="canonical" href="https://trip.burninghouse.ru/">
+
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+
+<!-- Open Graph / Twitter — не для поиска (noindex), а для превью, когда
+     ссылку присылают в мессенджере: эти краулеры игнорируют noindex и всё
+     равно тянут теги. -->
+<meta property="og:type" content="website">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="https://trip.burninghouse.ru/">
+<meta property="og:site_name" content="BurningHouse">
+<meta property="og:title" content="Куда поедем? — BurningHouse">
+<meta property="og:description" content="Совместное планирование поездок: общий чек-лист мест, счета и маршрут по дням.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Куда поедем? — BurningHouse">
+<meta name="twitter:description" content="Совместное планирование поездок: общий чек-лист мест, счета и маршрут по дням.">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,600;8..144,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/brand.css">
