@@ -1599,14 +1599,23 @@ let pdGeoPoint = null;    // { lat, lon } — то, что определили 
 let pdPaidBy = "";        // кто платил по счёту
 let pdSplitMode = "equal";// equal | some | custom
 let pdShares = new Map(); // userId → сумма, для some и custom
+let placeStep = 1;        // шаг мастера: 1 — что, 2 — когда, 3 — готово
+let createdPlace = null;  // место, созданное на втором шаге
 
+/**
+ * Создание идёт мастером, правка — обычной формой: тот же приём, что и у
+ * поездки (openTripDialog). Название и тип отвечаются не думая, а цену,
+ * карту, счёт и фото добавляют потом, когда они уже под рукой — заставлять
+ * решать всё это в момент, когда просто вспомнил о месте, незачем.
+ */
 function openPlaceDialog(place, presetDay) {
   editingPlace = place || null;
+  createdPlace = null;
+  placeStep = 1;
   pendingPhotos = [];
   pdKind = kindOf(place?.kind).id;   // у старых мест тип мог быть убран из списка
   pdGeoPoint = place && place.lat != null ? { lat: place.lat, lon: place.lon } : null;
 
-  $("placeDlgTitle").textContent = place ? "Место" : "Новое место";
   $("pdTitle").value = place?.title || "";
   $("pdDay").value = place?.day ?? (presetDay !== undefined ? presetDay : defaultDay());
   $("pdFrom").value = place?.timeFrom || "";
@@ -1623,7 +1632,6 @@ function openPlaceDialog(place, presetDay) {
   $("pdAddress").value = place?.address || "";
   $("pdLink").value = place?.linkUrl || "";
   $("pdNote").value = place?.note || "";
-  $("placeDeleteBtn").hidden = !place;
   // Свёрнутое, но заполненное поле никто не найдёт — раскрываем блок сам.
   $("pdMore").open = !!(place?.address || place?.linkUrl || place?.note);
 
@@ -1637,9 +1645,51 @@ function openPlaceDialog(place, presetDay) {
   renderGeoHint();
   renderThumbs();
   renderBill();
+  renderPlaceDialog();
   openScrim("placeScrim");
   setTimeout(() => $("pdTitle").focus(), 60);
 }
+
+function renderPlaceDialog() {
+  const wizard = !editingPlace;
+  $("pdSteps").hidden = !wizard;
+  $("pdHint").hidden = !wizard;
+  $("placeBackBtn").hidden = !wizard || placeStep === 1 || placeStep === 3;
+  $("placeCancelBtn").hidden = wizard && placeStep === 3;
+  $("placeDeleteBtn").hidden = !editingPlace;
+
+  if (wizard) {
+    $("pdSteps").querySelectorAll("i").forEach((dot, i) => {
+      dot.className = i + 1 === placeStep ? "on" : i + 1 < placeStep ? "done" : "";
+    });
+  }
+
+  // Что показываем на каждом шаге. При правке — всё сразу.
+  const show = {
+    pdWhat: !wizard || placeStep === 1,
+    pdWhen: !wizard || placeStep === 2,
+    pdExtra: !wizard,
+    pdDone: wizard && placeStep === 3,
+  };
+  for (const [id, on] of Object.entries(show)) $(id).hidden = !on;
+
+  if (!wizard) {
+    $("placeDlgTitle").textContent = "Место";
+    $("placeSaveBtn").textContent = "Сохранить";
+    return;
+  }
+  const steps = {
+    1: { title: "Что за место?", hint: "Название и тип — этого достаточно, чтобы начать. Остальное добавите потом.", button: "Дальше" },
+    2: { title: "Когда?", hint: "День и время можно не указывать — добавите, когда определитесь.", button: "Добавить" },
+    3: { title: "Готово", hint: "", button: "Готово" },
+  }[placeStep];
+  $("placeDlgTitle").textContent = steps.title;
+  $("pdHint").textContent = steps.hint;
+  $("pdHint").hidden = !steps.hint;
+  $("placeSaveBtn").textContent = steps.button;
+}
+
+$("placeBackBtn").onclick = () => { placeStep = Math.max(1, placeStep - 1); renderPlaceDialog(); };
 
 // ───────────────────────── счёт: кто платил и как делится ─────────────────────────
 const round2 = v => Math.round(v * 100) / 100;
@@ -2294,28 +2344,53 @@ async function ensurePlaceSaved() {
 }
 
 $("placeSaveBtn").onclick = async () => {
-  const body = placeBody();
-  if (body.costAmount != null && !Number.isFinite(body.costAmount)) return snack("Цена — это число");
+  // Правка: одна форма, одно сохранение — фото и бывшие в форме поля счёта
+  // уходят вместе, как и раньше.
+  if (editingPlace) {
+    const body = placeBody();
+    if (body.costAmount != null && !Number.isFinite(body.costAmount)) return snack("Цена — это число");
+    const tripId = state.trip.trip.id;
+    let data = await act(() => api(`/places/${editingPlace.id}`, { method: "PATCH", body }));
+    if (!data) return;
 
-  const tripId = state.trip.trip.id;
-  let data;
-  if (editingPlace) data = await act(() => api(`/places/${editingPlace.id}`, { method: "PATCH", body }));
-  else data = await act(() => api(`/trips/${tripId}/places`, { method: "POST", body }));
-  if (!data) return;
+    // Фото нового места ждали, пока у него появится id — тут оно уже есть.
+    if (pendingPhotos.length) {
+      for (const blob of pendingPhotos) await uploadPhoto(editingPlace.id, blob);
+      pendingPhotos = [];
+      data = await act(() => api("/trips/" + tripId));
+    }
 
-  // Фото нового места ждали, пока у него появится id.
-  if (pendingPhotos.length) {
-    const created = editingPlace
-      ? editingPlace
-      : data.places.slice().sort((a, b) => b.sortOrder - a.sortOrder)[0];
-    for (const blob of pendingPhotos) await uploadPhoto(created.id, blob);
-    pendingPhotos = [];
-    data = await act(() => api("/trips/" + tripId));
+    closeScrim("placeScrim");
+    state.trip = data;
+    renderTrip();
+    return;
   }
 
+  // Создание — мастером. Шаг 1 просит только название: без него сохранять нечего.
+  if (placeStep === 1) {
+    if (!$("pdTitle").value.trim()) return snack("Как назовём место?");
+    placeStep = 2;
+    renderPlaceDialog();
+    return;
+  }
+
+  // Шаг 2 — день и время, необязательные. Место создаётся сразу здесь: цену,
+  // карту и фото добавляют потом, открыв его снова (см. pdExtra).
+  if (placeStep === 2) {
+    const data = await act(() => api(`/trips/${state.trip.trip.id}/places`, { method: "POST", body: placeBody() }), "Место добавлено");
+    if (!data) return;
+    state.trip = data;
+    renderTrip();
+    createdPlace = data.places.slice().sort((a, b) => b.sortOrder - a.sortOrder)[0];
+    placeStep = 3;
+    $("pdDoneText").textContent = `«${createdPlace.title}» добавлено в список.`;
+    renderPlaceDialog();
+    return;
+  }
+
+  // Шаг 3 — готово, место уже сохранено и видно в списке позади диалога.
+  createdPlace = null;
   closeScrim("placeScrim");
-  state.trip = data;
-  renderTrip();
 };
 
 $("placeDeleteBtn").onclick = () => {

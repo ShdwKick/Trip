@@ -364,18 +364,29 @@
 <!-- ===================== ДИАЛОГ МЕСТА ===================== -->
 <div class="scrim" id="placeScrim">
   <div class="dialog wide">
+    <!-- Создание идёт шагами, правка — одной формой: тот же приём, что и у
+         поездки (см. #tripScrim). Мастер просит только название и тип —
+         цену, карту и фото не думая не заполнишь, и добавить их можно потом,
+         открыв уже созданное место. -->
+    <div class="steps" id="pdSteps" hidden><i></i><i></i><i></i></div>
+
     <h3 id="placeDlgTitle">Новое место</h3>
+    <p class="desc" id="pdHint" hidden></p>
 
-    <div class="field"><input id="pdTitle" type="text" placeholder=" " maxlength="200"><label for="pdTitle">Название</label></div>
-
-    <div class="kind-row" id="pdKinds"></div>
-
-    <div class="row">
-      <div class="field filled"><input id="pdDay" type="date"><label for="pdDay">День</label></div>
-      <div class="field filled" style="max-width:120px"><input id="pdFrom" type="time"><label for="pdFrom">Во сколько</label></div>
-      <div class="field filled" style="max-width:120px"><input id="pdTo" type="time"><label for="pdTo">До</label></div>
+    <div class="td-block" id="pdWhat">
+      <div class="field"><input id="pdTitle" type="text" placeholder=" " maxlength="200"><label for="pdTitle">Название</label></div>
+      <div class="kind-row" id="pdKinds"></div>
     </div>
 
+    <div class="td-block" id="pdWhen">
+      <div class="row">
+        <div class="field filled"><input id="pdDay" type="date"><label for="pdDay">День</label></div>
+        <div class="field filled" style="max-width:120px"><input id="pdFrom" type="time"><label for="pdFrom">Во сколько</label></div>
+        <div class="field filled" style="max-width:120px"><input id="pdTo" type="time"><label for="pdTo">До</label></div>
+      </div>
+    </div>
+
+    <div class="td-block" id="pdExtra">
     <!-- ===== Счёт: сколько, кто платил и как делится =====
          Цена живёт здесь же: она часть счёта, а не отдельное свойство места.
          И «за всё / с человека» больше не спорит с делением по чеку —
@@ -460,11 +471,22 @@
       <div class="thumbs" id="pdThumbs"></div>
       <div class="hint" id="pdPhotoHint">Можно показать место, в которое вы собираетесь поехать)</div>
     </div>
+    </div>
+
+    <!-- Последний шаг мастера: место уже создано и видно в списке позади. -->
+    <div class="td-block" id="pdDone" hidden>
+      <div class="done-ic">
+        <svg class="icon xl" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <p class="lead" id="pdDoneText">Место добавлено.</p>
+      <p class="hint">Цену, карту и фотографии можно добавить, когда откроете его снова.</p>
+    </div>
 
     <div class="dlg-actions">
       <button class="btn text danger" id="placeDeleteBtn" hidden>Удалить</button>
+      <button class="btn text" id="placeBackBtn" hidden>Назад</button>
       <div class="spacer"></div>
-      <button class="btn text" data-close>Отмена</button>
+      <button class="btn text" id="placeCancelBtn" data-close>Отмена</button>
       <button class="btn filled" id="placeSaveBtn">Сохранить</button>
     </div>
   </div>

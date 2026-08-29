@@ -559,6 +559,9 @@ a{color:var(--md-sys-color-primary)}
 #tdDone .lead{margin-bottom:4px}
 #tdDone .share-link{text-align:left}
 #tdDone .hint{text-align:left}
+#pdDone{text-align:center}
+#pdDone .lead{margin-bottom:4px}
+#pdDone .hint{text-align:left}
 
 .share-link{display:flex;gap:8px;margin-top:16px}
 .share-link input{
