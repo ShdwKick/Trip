@@ -1363,11 +1363,13 @@ $("placeFilter").addEventListener("click", e => {
 
 // ───────────────────────── диалоги: общая механика ─────────────────────────
 function openScrim(id) {
+  $(id).hidden = false;
   $(id).classList.add("open");
   document.body.classList.add("scroll-lock");
 }
 function closeScrim(id) {
   $(id).classList.remove("open");
+  $(id).hidden = true;
   if (!document.querySelector(".scrim.open")) document.body.classList.remove("scroll-lock");
   // Мастер закрыли на последнем шаге — поездка уже создана, и списку надо о
   // ней узнать. Иначе человек видит прежний список и думает, что не сохранилось.

@@ -10,10 +10,10 @@
      Лента (#/feed) и открытая по ссылке поездка (#/p/<id>) работают без входа,
      но это хэш-маршруты — для поисковика это один и тот же адрес, отдельной
      страницей их не увидеть и не проиндексировать. Индексировать пока нечего,
-     поэтому noindex; robots.txt при этом не блокирует краулинг — иначе Google
-     не увидит noindex и не снимет URL из выдачи, если он там уже был. -->
+     поэтому noindex; robots.txt при этом не блокирует краулинг — иначе
+     поисковик не увидит noindex и не снимет URL из выдачи, если он там уже был. -->
 <meta name="robots" content="noindex, follow">
-<meta name="description" content="Совместное планирование поездок: общий чек-лист мест с картами, датами и фотографиями, разбор счетов и маршрут по дням. Часть BurningHouse, вход через единый аккаунт.">
+<meta name="description" content="«Куда поедем?» — сервис для планирования поездок с друзьями: общий список мест на карте, даты, фотографии и разбор общих расходов. Часть BurningHouse, вход через единый аккаунт.">
 <link rel="canonical" href="https://trip.burninghouse.ru/">
 
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
@@ -26,10 +26,10 @@
 <meta property="og:url" content="https://trip.burninghouse.ru/">
 <meta property="og:site_name" content="BurningHouse">
 <meta property="og:title" content="Куда поедем? — BurningHouse">
-<meta property="og:description" content="Совместное планирование поездок: общий чек-лист мест, счета и маршрут по дням.">
+<meta property="og:description" content="Планируйте поездку вместе с друзьями: список мест на карте, общие расходы и маршрут по дням.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Куда поедем? — BurningHouse">
-<meta name="twitter:description" content="Совместное планирование поездок: общий чек-лист мест, счета и маршрут по дням.">
+<meta name="twitter:description" content="Планируйте поездку вместе с друзьями: список мест на карте, общие расходы и маршрут по дням.">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,600;8..144,700&display=swap" rel="stylesheet">
@@ -295,7 +295,7 @@
 </div>
 
 <!-- ===================== ДИАЛОГ ПОЕЗДКИ ===================== -->
-<div class="scrim" id="tripScrim">
+<div class="scrim" id="tripScrim" hidden>
   <div class="dialog">
     <!-- Создание идёт шагами, правка — одной формой. Разделение намеренное:
          мастер помогает, когда не знаешь, что спросят дальше; при правке он
@@ -362,7 +362,7 @@
 </div>
 
 <!-- ===================== ДИАЛОГ МЕСТА ===================== -->
-<div class="scrim" id="placeScrim">
+<div class="scrim" id="placeScrim" hidden>
   <div class="dialog wide">
     <!-- Создание идёт шагами, правка — одной формой: тот же приём, что и у
          поездки (см. #tripScrim). Мастер просит только название и тип —
@@ -493,7 +493,7 @@
 </div>
 
 <!-- ===================== ДИАЛОГ ПРИГЛАШЕНИЯ ===================== -->
-<div class="scrim" id="shareScrim">
+<div class="scrim" id="shareScrim" hidden>
   <div class="dialog">
     <h3>Позвать в поездку</h3>
     <p class="desc">Кто откроет ссылку и войдёт в BurningHouse — станет участником: сможет добавлять места, отмечать пункты и загружать фото.</p>
@@ -512,7 +512,7 @@
 </div>
 
 <!-- ===================== ПУБЛИКАЦИЯ ===================== -->
-<div class="scrim" id="publishScrim">
+<div class="scrim" id="publishScrim" hidden>
   <div class="dialog">
     <h3>Публикация в ленте</h3>
     <p class="desc">Опубликованную поездку видит кто угодно, даже без входа: места, даты, фото, маршрут. Чеки, доли и список участников не показываются никогда — их там просто нет. Любой сможет взять её за основу своей поездки.</p>
@@ -529,7 +529,7 @@
      Перенесён из «Моих финансов» без изменений в поведении: считать в уме
      «сколько с каждого, если счёт 4 780 на троих» посреди ввода — ровно тот
      случай, ради которого он там и появился. -->
-<div class="scrim" id="calcScrim">
+<div class="scrim" id="calcScrim" hidden>
   <div class="dialog calc-dialog">
     <h3>Калькулятор</h3>
     <div class="calc-display" id="calcDisplay">0</div>
@@ -562,7 +562,7 @@
 </div>
 
 <!-- ===================== ДИАЛОГ СМЕТЫ ===================== -->
-<div class="scrim" id="costScrim">
+<div class="scrim" id="costScrim" hidden>
   <div class="dialog">
     <h3>Из чего складывается смета</h3>
     <div class="cost-list" id="costList"></div>
@@ -576,7 +576,7 @@
 </div>
 
 <!-- ===================== ДИАЛОГ МАРШРУТА ===================== -->
-<div class="scrim" id="routeScrim">
+<div class="scrim" id="routeScrim" hidden>
   <div class="dialog">
     <h3>Маршрут</h3>
     <div class="field filled">
@@ -600,7 +600,7 @@
 </div>
 
 <!-- ===================== ПРОСМОТР ФОТО ===================== -->
-<div class="scrim viewer" id="photoScrim">
+<div class="scrim viewer" id="photoScrim" hidden>
   <button class="viewer-close icon-btn" data-close aria-label="Закрыть">
     <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
   </button>
@@ -618,7 +618,7 @@
 </div>
 
 <!-- ===================== ПОЗИЦИИ ЧЕКА ===================== -->
-<div class="scrim" id="itemsScrim">
+<div class="scrim" id="itemsScrim" hidden>
   <div class="dialog wide">
     <h3>Позиции чека</h3>
     <p class="desc" id="itemsDesc">Отметьте галочкой то, что заказывали вы. Позицию можно поделить на нескольких — нажмите на подпись справа от цены.</p>
@@ -649,7 +649,7 @@
 </div>
 
 <!-- ===================== ЧЕК: ВСТАВКА И РАЗБОР ===================== -->
-<div class="scrim" id="receiptScrim">
+<div class="scrim" id="receiptScrim" hidden>
   <div class="dialog wide">
     <h3>Позиции из чека</h3>
     <p class="desc" id="rcDesc">Вставьте чек текстом — из электронного чека, из приложения банка или ресторана. Разберём построчно: название, количество и сумму.</p>
@@ -682,7 +682,7 @@
 </div>
 
 <!-- ===================== ПЕРЕВОД ===================== -->
-<div class="scrim" id="payScrim">
+<div class="scrim" id="payScrim" hidden>
   <div class="dialog">
     <h3 id="payTitle">Перевод</h3>
     <div class="field has-action">
@@ -704,7 +704,7 @@
 </div>
 
 <!-- ===================== ПОДТВЕРЖДЕНИЕ ===================== -->
-<div class="scrim" id="confirmScrim">
+<div class="scrim" id="confirmScrim" hidden>
   <div class="dialog narrow">
     <h3 id="cfTitle">Точно?</h3>
     <p class="desc" id="cfText"></p>
@@ -720,7 +720,7 @@
      Пароль, почта и устройства живут в общем аккаунте BurningHouse — здесь
      только «вы вошли как» и ссылка туда. Разметка и логика — как в «Моих
      финансах» (там же id="profileScrim"). -->
-<div class="scrim" id="profileScrim">
+<div class="scrim" id="profileScrim" hidden>
   <div class="dialog narrow">
     <h3>Профиль</h3>
     <p class="desc">Вы вошли как <b id="pfLogin">—</b>. Пароль, почта и список устройств — в общем аккаунте BurningHouse, он один на все сервисы.</p>
